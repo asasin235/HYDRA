@@ -5,6 +5,7 @@ import path from 'path';
 import Agent from '../core/agent.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { getDebt } from '../core/db.js';
+import { appendBrain } from '../core/filesystem.js';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
@@ -33,6 +34,28 @@ const app = new App({
 
 // Lazy agent registry
 const agentRegistry = new Map();
+
+// Dedup and rate limiting
+const processed = new Set(); // store last 1000 event IDs
+const lastByUser = new Map(); // user -> timestamp ms
+
+function remember(id) {
+  processed.add(id);
+  if (processed.size > 1000) {
+    // remove oldest by recreating set from last 1000 entries
+    const arr = Array.from(processed);
+    processed.clear();
+    for (const v of arr.slice(-1000)) processed.add(v);
+  }
+}
+
+async function logDrop(entry) {
+  try {
+    await appendBrain('errors', 'slack_drops.json', { ...entry, ts: new Date().toISOString() });
+  } catch (e) {
+    console.error('[slack-gateway] drop log error:', e.message);
+  }
+}
 
 function getOrCreateAgent(name) {
   if (agentRegistry.has(name)) return agentRegistry.get(name);
@@ -68,7 +91,24 @@ app.message(/^\s*@?hydra\s+(\S+)\s+([\s\S]+)/i, async ({ message, say, context }
     const channel = context?.channelName || '';
     if (!channel.startsWith('hydra-')) return;
 
+    const evtId = `${message.channel}:${message.ts}`;
+    if (processed.has(evtId)) {
+      // duplicate delivery
+      await logDrop({ reason: 'duplicate', evtId, user: message.user, text: message.text });
+      return;
+    }
+    remember(evtId);
+
     const user = message.user;
+    const now = Date.now();
+    const last = lastByUser.get(user) || 0;
+    if (now - last < 3000) {
+      await say({ thread_ts: message.ts, text: 'Please wait before sending another command' });
+      await logDrop({ reason: 'rate_limited', evtId, user, text: message.text });
+      return;
+    }
+    lastByUser.set(user, now);
+
     const agentName = context.matches[1].trim();
     const userText = context.matches[2].trim();
 
@@ -79,12 +119,23 @@ app.message(/^\s*@?hydra\s+(\S+)\s+([\s\S]+)/i, async ({ message, say, context }
       text: `🤖 ${agentName} is thinking...`
     });
 
-    const response = await agent.run(userText, `Slack user: <@${user}> in #${channel}`);
+    // Timeout after 30s with a notice, but continue processing
+    const runPromise = agent.run(userText, `Slack user: <@${user}> in #${channel}`);
+    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('TIMEOUT'), 30000));
+    const race = await Promise.race([runPromise, timeoutPromise]);
 
-    await say({
-      thread_ts: message.ts,
-      text: `*${agentName}:* ${response}`
-    });
+    if (race === 'TIMEOUT') {
+      await say({ thread_ts: message.ts, text: `Agent ${agentName} is processing... check #${channel} for response` });
+      // When finished, post the actual response
+      try {
+        const response = await runPromise;
+        await say({ thread_ts: message.ts, text: `*${agentName}:* ${response}` });
+      } catch (e) {
+        console.error('[slack-gateway] delayed run error:', e.message);
+      }
+    } else {
+      await say({ thread_ts: message.ts, text: `*${agentName}:* ${race}` });
+    }
   } catch (error) {
     console.error('[slack-gateway] message handler error:', error.message);
     await say({
