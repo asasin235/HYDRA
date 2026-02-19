@@ -1,0 +1,38 @@
+{
+  "name": "hydra",
+  "version": "1.0.0",
+  "description": "HYDRA — Personal AI Operating System",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "pm2 start ecosystem.config.cjs",
+    "dev": "pm2 start ecosystem.config.cjs --only start-mvp",
+    "setup": "node scripts/setup.js",
+    "stop": "pm2 stop all",
+    "logs": "pm2 logs",
+    "status": "pm2 status"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "personal-os"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@lancedb/lancedb": "^0.15.0",
+    "@slack/bolt": "^4.1.0",
+    "axios": "^1.7.0",
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
+    "fs-extra": "^11.2.0",
+    "node-cron": "^3.0.3",
+    "openai": "^4.77.0",
+    "pm2": "^5.4.0",
+    "uuid": "^11.0.0"
+  }
+}
