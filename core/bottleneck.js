@@ -5,6 +5,7 @@ const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
 const USAGE_DIR = path.join(PI_SMB_PATH, 'brain', 'usage');
 const MONTHLY_USAGE_FILE = path.join(USAGE_DIR, 'monthly_usage.json');
 const PAUSED_AGENTS_FILE = path.join(USAGE_DIR, 'paused_agents.json');
+const CIRCUIT_BREAKERS_FILE = path.join(USAGE_DIR, 'circuit_breakers.json');
 
 // Cost per token (in dollars) for different models
 const MODEL_RATES = {
@@ -23,6 +24,15 @@ const MODEL_RATES = {
 
 // Monthly budget cap in dollars
 const MONTHLY_BUDGET = 50;
+
+// Priority tiers
+const TIER1 = ['00-architect','06-cfobot','01-edmobot'];
+const TIER2 = ['03-sahibabot','07-biobot','05-jarvis'];
+const TIER3 = ['02-brandbot','09-wolf','11-auditor'];
+
+// In-memory circuit breaker state
+const failures = new Map(); // agent -> number & timestamps
+const OPEN_CIRCUITS = new Set();
 
 // Initialize usage directory
 await fs.ensureDir(USAGE_DIR);
@@ -102,6 +112,38 @@ async function savePausedAgents(paused) {
   }
 }
 
+async function loadCircuits() {
+  try {
+    const exists = await fs.pathExists(CIRCUIT_BREAKERS_FILE);
+    if (!exists) return {};
+    return await fs.readJson(CIRCUIT_BREAKERS_FILE);
+  } catch {
+    return {};
+  }
+}
+
+async function saveCircuits(state) {
+  try {
+    await fs.writeJson(CIRCUIT_BREAKERS_FILE, state, { spaces: 2 });
+  } catch (e) {
+    console.error('[bottleneck] Failed to save circuit breakers:', e.message);
+  }
+}
+
+async function postSlackAlert(text) {
+  try {
+    const token = process.env.SLACK_BOT_TOKEN;
+    const channel = process.env.SLACK_STATUS_CHANNEL || '#hydra-status';
+    if (!token) return;
+    const axios = (await import('axios')).default;
+    await axios.post('https://slack.com/api/chat.postMessage', { channel, text }, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+  } catch (e) {
+    console.error('[bottleneck] Slack alert error:', e.message);
+  }
+}
+
 /**
  * Check if an agent has budget to make a request
  * @param {string} agentName - Agent identifier
@@ -112,19 +154,35 @@ export async function checkBudget(agentName, estimatedTokens = 0) {
   try {
     const usage = await loadUsage();
     const paused = await loadPausedAgents();
-    
-    // Check if agent is explicitly paused
+    const circuits = await loadCircuits();
+
+    // Circuit breaker open?
+    if (OPEN_CIRCUITS.has(agentName) || circuits[agentName]?.state === 'OPEN') {
+      console.log(`[bottleneck] Circuit OPEN for ${agentName}`);
+      return false;
+    }
+
+    // Explicit pause file
     if (paused[agentName]?.PAUSED) {
       console.log(`[bottleneck] Agent ${agentName} is paused`);
       return false;
     }
-    
-    // Check total monthly budget
-    if (usage.totalCost >= MONTHLY_BUDGET) {
-      console.log(`[bottleneck] Monthly budget exceeded: $${usage.totalCost.toFixed(2)}/$${MONTHLY_BUDGET}`);
+
+    // Priority tier enforcement by monthly budget utilization
+    const utilization = usage.totalCost / MONTHLY_BUDGET; // 0..1
+
+    if (TIER3.includes(agentName) && utilization >= 0.60) {
       return false;
     }
-    
+    if (TIER2.includes(agentName) && utilization >= 0.80) {
+      return false;
+    }
+
+    // Hard cap: at or beyond 100%, only Tier1 proceeds
+    if (utilization >= 1.0 && !TIER1.includes(agentName)) {
+      return false;
+    }
+
     return true;
   } catch (error) {
     console.error('[bottleneck] checkBudget error:', error.message);
@@ -274,6 +332,46 @@ export async function unpauseAgent(agentName) {
   } catch (error) {
     console.error('[bottleneck] unpauseAgent error:', error.message);
   }
+}
+
+/** Circuit breaker: record a failure and potentially trip. */
+export async function recordFailure(agentName) {
+  try {
+    const now = Date.now();
+    const windowMs = 5 * 60 * 1000; // 5 minutes
+    const bucket = failures.get(agentName) || [];
+    const recent = bucket.filter(ts => now - ts < windowMs);
+    recent.push(now);
+    failures.set(agentName, recent);
+    if (recent.length >= 3) {
+      OPEN_CIRCUITS.add(agentName);
+      const circuits = await loadCircuits();
+      circuits[agentName] = { state: 'OPEN', trippedAt: new Date().toISOString(), reason: '3 failures within 5m' };
+      await saveCircuits(circuits);
+      await postSlackAlert(`@here ${agentName} circuit breaker tripped — disabled until manual reset`);
+    }
+  } catch (e) {
+    console.error('[bottleneck] recordFailure error:', e.message);
+  }
+}
+
+export async function resetCircuit(agentName) {
+  try {
+    OPEN_CIRCUITS.delete(agentName);
+    failures.delete(agentName);
+    const circuits = await loadCircuits();
+    if (circuits[agentName]) {
+      circuits[agentName] = { state: 'CLOSED', resetAt: new Date().toISOString() };
+      await saveCircuits(circuits);
+    }
+  } catch (e) {
+    console.error('[bottleneck] resetCircuit error:', e.message);
+  }
+}
+
+export async function isOpen(agentName) {
+  const circuits = await loadCircuits();
+  return OPEN_CIRCUITS.has(agentName) || circuits[agentName]?.state === 'OPEN';
 }
 
 /**
