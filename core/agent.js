@@ -1,10 +1,48 @@
 import fs from 'fs-extra';
 import path from 'path';
 import OpenAI from 'openai';
+import express from 'express';
 import { checkBudget, recordUsage } from './bottleneck.js';
-import { brainPath, appendBrain } from './filesystem.js';
+import { brainPath, appendBrain, writeBrain } from './filesystem.js';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const HEALTH_PORT = Number(process.env.HEALTH_PORT || 3002);
+const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+
+// ── Shared health-check Express app (one server for all agents) ───────────────
+const _healthApp = express();
+let _healthServer = null;
+const _agentRegistry = new Map(); // name → {status,lastRun,tokensUsed,tokensBudget,circuit,startedAt}
+
+function ensureHealthServer() {
+  if (_healthServer) return;
+  _healthApp.get('/health/:agent', (req, res) => {
+    const info = _agentRegistry.get(req.params.agent);
+    if (!info) return res.status(404).json({ error: 'agent not registered' });
+    res.json({
+      agent: req.params.agent,
+      status: 'healthy',
+      lastRun: info.lastRun || null,
+      tokensTodayUsed: info.tokensUsed || 0,
+      tokensTodayBudget: info.tokensBudget || 0,
+      circuitBreaker: info.circuit || 'closed',
+      uptime: Math.floor((Date.now() - info.startedAt) / 1000)
+    });
+  });
+  _healthApp.get('/health', (req, res) => {
+    const all = {};
+    for (const [name, info] of _agentRegistry.entries()) {
+      all[name] = { status: 'healthy', lastRun: info.lastRun, uptime: Math.floor((Date.now() - info.startedAt) / 1000) };
+    }
+    res.json(all);
+  });
+  _healthServer = _healthApp.listen(HEALTH_PORT, () => {
+    console.log(`[agent:health] server listening on port ${HEALTH_PORT}`);
+  });
+  _healthServer.on('error', (e) => {
+    if (e.code !== 'EADDRINUSE') console.error('[agent:health] server error:', e.message);
+  });
+}
 
 const openai = new OpenAI({
   apiKey: OPENROUTER_API_KEY,
@@ -46,6 +84,13 @@ export default class Agent {
     this.namespace = namespace || (name || 'agent');
     this.tokenBudget = tokenBudget;
     this.systemPrompt = '';
+    this._startedAt = Date.now();
+    // Register with health server
+    _agentRegistry.set(this.name, { lastRun: null, tokensUsed: 0, tokensBudget: tokenBudget, circuit: 'closed', startedAt: this._startedAt });
+    ensureHealthServer();
+    // Write heartbeat every 5 minutes
+    this._heartbeatInterval = setInterval(() => this.#writeHeartbeat(), 5 * 60 * 1000);
+    this.#writeHeartbeat(); // initial heartbeat on startup
   }
 
   async reloadPrompt() {
@@ -156,6 +201,12 @@ export default class Agent {
       // Record usage
       await recordUsage(this.name, promptTokens, completionTokens, this.model);
 
+      // Update health registry
+      const reg = _agentRegistry.get(this.name) || {};
+      reg.lastRun = new Date().toISOString();
+      reg.tokensUsed = (reg.tokensUsed || 0) + promptTokens + completionTokens;
+      _agentRegistry.set(this.name, reg);
+
       // Log interaction
       await this.#logInteraction(userMessage, finalText, { inputTokens: promptTokens, outputTokens: completionTokens });
 
@@ -166,6 +217,14 @@ export default class Agent {
         await this.#logInteraction(userMessage, `ERROR: ${error.message}`, { inputTokens: 0, outputTokens: 0 });
       } catch {}
       return `Agent ${this.name} failed: ${error.message}`;
+    }
+  }
+
+  async #writeHeartbeat() {
+    try {
+      await writeBrain(this.namespace, 'heartbeat.json', { ts: Date.now(), status: 'alive', agent: this.name });
+    } catch (e) {
+      // Heartbeat write failures are non-fatal
     }
   }
 

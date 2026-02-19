@@ -2,6 +2,7 @@ import { App } from '@slack/bolt';
 import { existsSync } from 'fs';
 import fs from 'fs-extra';
 import path from 'path';
+import { execSync } from 'child_process';
 import Agent from '../core/agent.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { getDebt } from '../core/db.js';
@@ -166,6 +167,97 @@ app.action('hydra_reject', async ({ body, ack, say }) => {
   } catch (e) {
     console.error('[slack-gateway] reject action error:', e.message);
   }
+});
+
+// ── Reflection approval handler ─────────────────────────────────────────────
+
+async function applyReflectionChanges(agentName, weekNum) {
+  const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+  const AGENT_NS_MAP = {
+    '00-architect': '00_ARCHITECT', '01-edmobot': '01_EDMO', '02-brandbot': '02_BRAND',
+    '03-sahibabot': '03_SAHIBA', '05-jarvis': '05_JARVIS', '06-cfobot': '06_CFO',
+    '07-biobot': '07_BIOBOT', '09-wolf': '09_WOLF', '10-mercenary': '10_MERCENARY'
+  };
+  const ns = AGENT_NS_MAP[agentName] || agentName;
+  const reflFile = path.join(BRAIN_PATH, 'brain', ns, 'reflections', `week_${weekNum}.json`);
+  const promptFile = path.join(process.cwd(), 'prompts', `${agentName}.txt`);
+
+  if (!await fs.pathExists(reflFile)) return { error: 'Reflection file not found' };
+  const reflection = await fs.readJson(reflFile);
+  const changes = reflection.prompt_changes || [];
+
+  let promptText = (await fs.pathExists(promptFile)) ? await fs.readFile(promptFile, 'utf-8') : '';
+  let applied = 0;
+  for (const change of changes) {
+    if (!change.current_text || !change.proposed_text) continue;
+    if (promptText.includes(change.current_text)) {
+      promptText = promptText.replace(change.current_text, change.proposed_text);
+      applied++;
+    } else {
+      // Append as new rule
+      promptText += `\n\n## Reflection Update W${weekNum}\n${change.proposed_text}`;
+      applied++;
+    }
+  }
+
+  await fs.writeFile(promptFile, promptText, 'utf-8');
+
+  try {
+    execSync(`git -C ${process.cwd()} add prompts/ && git -C ${process.cwd()} commit -m "reflect: ${agentName} w${weekNum} ${reflection.score}/10"`, { timeout: 10000 });
+  } catch (e) {
+    console.error('[gateway] git commit error:', e.message);
+  }
+
+  // Reload agent in the running process if registered, else restart via PM2
+  const runningAgent = agentRegistry.get(agentName);
+  if (runningAgent) {
+    await runningAgent.reloadPrompt();
+  } else {
+    try { execSync(`pm2 restart ${agentName} --no-color 2>/dev/null || true`, { timeout: 5000 }); } catch {}
+  }
+
+  return { applied, total: changes.length };
+}
+
+app.action('reflect_approve', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const value = body.actions?.[0]?.value || '';
+    const [agentName, weekNumStr] = value.split('|');
+    const weekNum = Number(weekNumStr);
+    const result = await applyReflectionChanges(agentName, weekNum);
+    if (result.error) {
+      await say({ text: `❌ Reflection approval failed: ${result.error}` });
+    } else {
+      await say({ text: `✅ ${agentName} updated. ${result.applied}/${result.total} changes applied. Reloaded.` });
+    }
+  } catch (e) {
+    console.error('[slack-gateway] reflect_approve error:', e.message);
+    await say({ text: `❌ Error: ${e.message}` });
+  }
+});
+
+app.action('reflect_skip', async ({ body, ack, say }) => {
+  await ack();
+  const value = body.actions?.[0]?.value || '';
+  const [agentName, weekNum] = value.split('|');
+  await say({ text: `⏭ Skipped reflection for ${agentName} week ${weekNum}.` });
+});
+
+// SabihaBot message draft actions
+app.action('sabiha_send', async ({ body, ack, say }) => {
+  await ack();
+  const value = (body.actions?.[0]?.value || '').replace(/^send:/, '');
+  await say({ text: `📤 Message to send: "${value}"` });
+});
+app.action('sabiha_edit', async ({ body, ack, say }) => {
+  await ack();
+  const value = (body.actions?.[0]?.value || '').replace(/^edit:/, '');
+  await say({ text: `✏️ Edit this draft:\n${value}` });
+});
+app.action('sabiha_discard', async ({ body, ack, say }) => {
+  await ack();
+  await say({ text: '🗑️ Draft discarded.' });
 });
 
 // /hydra-status command
