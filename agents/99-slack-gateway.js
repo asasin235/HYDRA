@@ -1,0 +1,175 @@
+import { App } from '@slack/bolt';
+import { existsSync } from 'fs';
+import fs from 'fs-extra';
+import path from 'path';
+import Agent from '../core/agent.js';
+import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
+import { getDebt } from '../core/db.js';
+
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
+const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
+const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN;
+const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
+
+function assertEnv() {
+  const missing = [];
+  if (!SLACK_BOT_TOKEN) missing.push('SLACK_BOT_TOKEN');
+  if (!SLACK_SIGNING_SECRET) missing.push('SLACK_SIGNING_SECRET');
+  if (!SLACK_APP_TOKEN) missing.push('SLACK_APP_TOKEN');
+  if (missing.length) {
+    console.error('[slack-gateway] Missing env:', missing.join(', '));
+    process.exit(1);
+  }
+}
+
+assertEnv();
+
+const app = new App({
+  token: SLACK_BOT_TOKEN,
+  signingSecret: SLACK_SIGNING_SECRET,
+  appToken: SLACK_APP_TOKEN,
+  socketMode: true
+});
+
+// Lazy agent registry
+const agentRegistry = new Map();
+
+function getOrCreateAgent(name) {
+  if (agentRegistry.has(name)) return agentRegistry.get(name);
+  // Sensible defaults; individual agents can be specialized later
+  const agent = new Agent({
+    name,
+    model: 'anthropic/claude-sonnet-4',
+    systemPromptPath: path.join('prompts', `${name}.md`),
+    tools: [],
+    namespace: name,
+    tokenBudget: 8000
+  });
+  agentRegistry.set(name, agent);
+  return agent;
+}
+
+// Utility to write pending action results
+async function writePendingAction(agentName, approved) {
+  try {
+    const nsDir = path.join(PI_SMB_PATH, 'brain', agentName);
+    await fs.ensureDir(nsDir);
+    const file = path.join(nsDir, 'pending_action.json');
+    await fs.writeJson(file, { approved, ts: Date.now() }, { spaces: 2 });
+  } catch (e) {
+    console.error('[slack-gateway] writePendingAction error:', e.message);
+  }
+}
+
+// Message router: "@hydra [agent] [message]"
+app.message(/^\s*@?hydra\s+(\S+)\s+([\s\S]+)/i, async ({ message, say, context }) => {
+  try {
+    // Verify channel name begins with hydra-
+    const channel = context?.channelName || '';
+    if (!channel.startsWith('hydra-')) return;
+
+    const user = message.user;
+    const agentName = context.matches[1].trim();
+    const userText = context.matches[2].trim();
+
+    const agent = getOrCreateAgent(agentName);
+
+    await say({
+      thread_ts: message.ts,
+      text: `🤖 ${agentName} is thinking...`
+    });
+
+    const response = await agent.run(userText, `Slack user: <@${user}> in #${channel}`);
+
+    await say({
+      thread_ts: message.ts,
+      text: `*${agentName}:* ${response}`
+    });
+  } catch (error) {
+    console.error('[slack-gateway] message handler error:', error.message);
+    await say({
+      thread_ts: message.ts,
+      text: `Error: ${error.message}`
+    });
+  }
+});
+
+// Approve/Reject actions
+app.action('hydra_approve', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const agentName = body.actions?.[0]?.value || 'unknown';
+    await writePendingAction(agentName, true);
+    await say({ text: `✅ Approved for ${agentName}` });
+  } catch (e) {
+    console.error('[slack-gateway] approve action error:', e.message);
+  }
+});
+
+app.action('hydra_reject', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const agentName = body.actions?.[0]?.value || 'unknown';
+    await writePendingAction(agentName, false);
+    await say({ text: `❌ Rejected for ${agentName}` });
+  } catch (e) {
+    console.error('[slack-gateway] reject action error:', e.message);
+  }
+});
+
+// /hydra-status command
+app.command('/hydra-status', async ({ ack, respond }) => {
+  await ack();
+  try {
+    // PM2 status via API
+    const pm2 = await import('pm2');
+    const processes = await new Promise((resolve, reject) => {
+      pm2.connect(err => {
+        if (err) return reject(err);
+        pm2.list((err2, list) => {
+          pm2.disconnect();
+          return err2 ? reject(err2) : resolve(list || []);
+        });
+      });
+    });
+
+    const statuses = processes.map(p => ({ name: p.name, status: p.pm2_env?.status }));
+
+    // Token spend today for known agents in ecosystem
+    const agentNames = [
+      '00-architect','01-edmobot','02-brandbot','03-sahibabot','05-jarvis','06-cfobot','07-biobot','09-wolf','10-mercenary','11-auditor','99-slack-gateway'
+    ];
+    const today = await Promise.all(agentNames.map(async n => ({ name: n, ...(await getTodaySpend(n)) })));
+    const todayTotal = today.reduce((sum, a) => sum + (a.cost || 0), 0);
+
+    // Debt tracker from SQLite
+    const debt = getDebt();
+
+    const blocks = [
+      { type: 'section', text: { type: 'mrkdwn', text: '*HYDRA Status*' } },
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text: '*PM2*' } },
+      { type: 'section', text: { type: 'mrkdwn', text: statuses.map(s => `• ${s.name}: ${s.status}`).join('\n') || 'No processes' } },
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text: `*Today Token Spend:* $${todayTotal.toFixed(4)}` } },
+      { type: 'section', text: { type: 'mrkdwn', text: today.map(a => `• ${a.name}: $${(a.cost || 0).toFixed(4)}`).join('\n') } },
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text: `*Debt:* Debt: $${(debt?.debt || 0).toFixed(2)} | Paid: $${(debt?.paid || 0).toFixed(2)} | Wedding: $${(debt?.wedding_fund || 0).toFixed(2)}` } }
+    ];
+
+    await respond({ blocks, text: 'HYDRA Status' });
+  } catch (error) {
+    console.error('[slack-gateway] /hydra-status error:', error.message);
+    await respond({ text: `Status error: ${error.message}` });
+  }
+});
+
+(async () => {
+  try {
+    await app.start();
+    console.log('[slack-gateway] Bolt app running in socket mode');
+  } catch (error) {
+    console.error('[slack-gateway] failed to start:', error.message);
+    process.exit(1);
+  }
+})();
