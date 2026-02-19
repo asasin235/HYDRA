@@ -1,0 +1,291 @@
+import fs from 'fs-extra';
+import path from 'path';
+
+const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
+const USAGE_DIR = path.join(PI_SMB_PATH, 'brain', 'usage');
+const MONTHLY_USAGE_FILE = path.join(USAGE_DIR, 'monthly_usage.json');
+const PAUSED_AGENTS_FILE = path.join(USAGE_DIR, 'paused_agents.json');
+
+// Cost per token (in dollars) for different models
+const MODEL_RATES = {
+  'google/gemini-flash-3': 0.000001,
+  'anthropic/claude-sonnet-4': 0.000015,
+  'deepseek/deepseek-r1': 0.0000055,
+  'mistral/mistral-small-latest': 0.0000004,
+  // Common aliases
+  'gemini-flash': 0.000001,
+  'claude-sonnet': 0.000015,
+  'deepseek-r1': 0.0000055,
+  'mistral-small': 0.0000004,
+  // Default fallback rate
+  'default': 0.00001
+};
+
+// Monthly budget cap in dollars
+const MONTHLY_BUDGET = 50;
+
+// Initialize usage directory
+await fs.ensureDir(USAGE_DIR);
+
+/**
+ * Get current month key (YYYY-MM)
+ */
+function getMonthKey() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+/**
+ * Get today's date key (YYYY-MM-DD)
+ */
+function getDateKey() {
+  return new Date().toISOString().split('T')[0];
+}
+
+/**
+ * Load monthly usage data
+ * @returns {Promise<object>} Usage data
+ */
+async function loadUsage() {
+  try {
+    const exists = await fs.pathExists(MONTHLY_USAGE_FILE);
+    if (!exists) {
+      return { month: getMonthKey(), agents: {}, totalCost: 0 };
+    }
+    const data = await fs.readJson(MONTHLY_USAGE_FILE);
+    
+    // Reset if new month
+    if (data.month !== getMonthKey()) {
+      return { month: getMonthKey(), agents: {}, totalCost: 0 };
+    }
+    return data;
+  } catch (error) {
+    console.error('[bottleneck] Failed to load usage:', error.message);
+    return { month: getMonthKey(), agents: {}, totalCost: 0 };
+  }
+}
+
+/**
+ * Save monthly usage data
+ * @param {object} usage - Usage data
+ */
+async function saveUsage(usage) {
+  try {
+    await fs.writeJson(MONTHLY_USAGE_FILE, usage, { spaces: 2 });
+  } catch (error) {
+    console.error('[bottleneck] Failed to save usage:', error.message);
+  }
+}
+
+/**
+ * Load paused agents data
+ * @returns {Promise<object>} Paused agents map
+ */
+async function loadPausedAgents() {
+  try {
+    const exists = await fs.pathExists(PAUSED_AGENTS_FILE);
+    if (!exists) return {};
+    return await fs.readJson(PAUSED_AGENTS_FILE);
+  } catch (error) {
+    return {};
+  }
+}
+
+/**
+ * Save paused agents data
+ * @param {object} paused - Paused agents map
+ */
+async function savePausedAgents(paused) {
+  try {
+    await fs.writeJson(PAUSED_AGENTS_FILE, paused, { spaces: 2 });
+  } catch (error) {
+    console.error('[bottleneck] Failed to save paused agents:', error.message);
+  }
+}
+
+/**
+ * Check if an agent has budget to make a request
+ * @param {string} agentName - Agent identifier
+ * @param {number} estimatedTokens - Estimated tokens for the request
+ * @returns {Promise<boolean>} True if within budget
+ */
+export async function checkBudget(agentName, estimatedTokens = 0) {
+  try {
+    const usage = await loadUsage();
+    const paused = await loadPausedAgents();
+    
+    // Check if agent is explicitly paused
+    if (paused[agentName]?.PAUSED) {
+      console.log(`[bottleneck] Agent ${agentName} is paused`);
+      return false;
+    }
+    
+    // Check total monthly budget
+    if (usage.totalCost >= MONTHLY_BUDGET) {
+      console.log(`[bottleneck] Monthly budget exceeded: $${usage.totalCost.toFixed(2)}/$${MONTHLY_BUDGET}`);
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[bottleneck] checkBudget error:', error.message);
+    return true; // Allow on error to not block operations
+  }
+}
+
+/**
+ * Record token usage and calculate cost
+ * @param {string} agentName - Agent identifier
+ * @param {number} inputTokens - Input tokens used
+ * @param {number} outputTokens - Output tokens used
+ * @param {string} model - Model used
+ */
+export async function recordUsage(agentName, inputTokens, outputTokens, model) {
+  try {
+    const usage = await loadUsage();
+    const dateKey = getDateKey();
+    
+    // Get rate for model (use default if not found)
+    const rate = MODEL_RATES[model] || MODEL_RATES['default'];
+    const totalTokens = inputTokens + outputTokens;
+    const cost = totalTokens * rate;
+    
+    // Initialize agent data if needed
+    if (!usage.agents[agentName]) {
+      usage.agents[agentName] = {
+        daily: {},
+        monthlyTokens: 0,
+        monthlyCost: 0
+      };
+    }
+    
+    // Update daily stats
+    if (!usage.agents[agentName].daily[dateKey]) {
+      usage.agents[agentName].daily[dateKey] = { tokens: 0, cost: 0 };
+    }
+    usage.agents[agentName].daily[dateKey].tokens += totalTokens;
+    usage.agents[agentName].daily[dateKey].cost += cost;
+    
+    // Update monthly stats
+    usage.agents[agentName].monthlyTokens += totalTokens;
+    usage.agents[agentName].monthlyCost += cost;
+    
+    // Update total cost
+    usage.totalCost += cost;
+    
+    await saveUsage(usage);
+    
+    // Check if we need to pause non-critical agents
+    if (usage.totalCost > MONTHLY_BUDGET) {
+      await pauseNonCriticalAgents(usage);
+    }
+    
+    console.log(`[bottleneck] ${agentName}: ${totalTokens} tokens, $${cost.toFixed(6)} (${model})`);
+  } catch (error) {
+    console.error('[bottleneck] recordUsage error:', error.message);
+  }
+}
+
+/**
+ * Pause non-critical agents when budget exceeded
+ * @param {object} usage - Current usage data
+ */
+async function pauseNonCriticalAgents(usage) {
+  // Critical agents that should never be paused
+  const CRITICAL_AGENTS = ['00-architect', '06-cfobot', '01-edmobot'];
+  
+  const paused = await loadPausedAgents();
+  let updated = false;
+  
+  for (const agent of Object.keys(usage.agents)) {
+    if (!CRITICAL_AGENTS.includes(agent) && !paused[agent]?.PAUSED) {
+      paused[agent] = { PAUSED: true, reason: 'Monthly budget exceeded', pausedAt: new Date().toISOString() };
+      updated = true;
+      console.log(`[bottleneck] Paused non-critical agent: ${agent}`);
+    }
+  }
+  
+  if (updated) {
+    await savePausedAgents(paused);
+  }
+}
+
+/**
+ * Get monthly spend summary
+ * @returns {Promise<object>} {total, perAgent}
+ */
+export async function getMonthlySpend() {
+  try {
+    const usage = await loadUsage();
+    
+    const perAgent = {};
+    for (const [agent, data] of Object.entries(usage.agents)) {
+      perAgent[agent] = {
+        tokens: data.monthlyTokens,
+        cost: data.monthlyCost
+      };
+    }
+    
+    return {
+      month: usage.month,
+      total: usage.totalCost,
+      budget: MONTHLY_BUDGET,
+      remaining: MONTHLY_BUDGET - usage.totalCost,
+      perAgent
+    };
+  } catch (error) {
+    console.error('[bottleneck] getMonthlySpend error:', error.message);
+    return { month: getMonthKey(), total: 0, budget: MONTHLY_BUDGET, remaining: MONTHLY_BUDGET, perAgent: {} };
+  }
+}
+
+/**
+ * Get today's spend for an agent
+ * @param {string} agentName - Agent identifier
+ * @returns {Promise<object>} {tokens, cost}
+ */
+export async function getTodaySpend(agentName) {
+  try {
+    const usage = await loadUsage();
+    const dateKey = getDateKey();
+    
+    const agentData = usage.agents[agentName];
+    if (!agentData?.daily?.[dateKey]) {
+      return { tokens: 0, cost: 0 };
+    }
+    
+    return agentData.daily[dateKey];
+  } catch (error) {
+    return { tokens: 0, cost: 0 };
+  }
+}
+
+/**
+ * Unpause an agent manually
+ * @param {string} agentName - Agent identifier
+ */
+export async function unpauseAgent(agentName) {
+  try {
+    const paused = await loadPausedAgents();
+    if (paused[agentName]) {
+      delete paused[agentName];
+      await savePausedAgents(paused);
+      console.log(`[bottleneck] Unpaused agent: ${agentName}`);
+    }
+  } catch (error) {
+    console.error('[bottleneck] unpauseAgent error:', error.message);
+  }
+}
+
+/**
+ * Check if an agent is paused
+ * @param {string} agentName - Agent identifier
+ * @returns {Promise<boolean>} True if paused
+ */
+export async function isPaused(agentName) {
+  try {
+    const paused = await loadPausedAgents();
+    return paused[agentName]?.PAUSED === true;
+  } catch (error) {
+    return false;
+  }
+}
