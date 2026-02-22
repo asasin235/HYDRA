@@ -22,8 +22,7 @@ const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const SOCIAL_DIR = path.join(BRAIN_PATH, 'brain', '04_SOCIAL');
 const DRAFTS_FILE = path.join(SOCIAL_DIR, 'pending_drafts.json');
 
-// OpenClaw Gateway
-const OPENCLAW_URL = process.env.OPENCLAW_URL || 'http://127.0.0.1:3100';
+// Webhook port for receiving messages from OpenClaw hooks
 const WEBHOOK_PORT = Number(process.env.SOCIAL_WEBHOOK_PORT || 3004);
 
 // Daily budget: $1/day for SocialBot
@@ -266,8 +265,7 @@ webhookApp.get('/social/health', (req, res) => {
     agent: '04-socialbot',
     status: 'healthy',
     tokensUsedToday,
-    dailyBudget: DAILY_BUDGET_TOKENS,
-    openclawUrl: OPENCLAW_URL
+    dailyBudget: DAILY_BUDGET_TOKENS
   });
 });
 

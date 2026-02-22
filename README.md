@@ -115,9 +115,10 @@ A multi-agent AI system that manages your entire life — from work productivity
 
 ### `core/openclaw.js` — Messaging Gateway Client
 
-- Shared client for OpenClaw Gateway — **any agent** can send messages
+- Uses the **OpenClaw CLI** (`openclaw message send`, etc.) via `child_process.execFile`
 - Exports: `sendMessage()`, `sendWhatsApp()`, `sendIMessage()`, `sendDiscord()`, `sendTelegram()`
-- Also: `getGatewayStatus()`, `getMessages()` for reading recent threads
+- Also: `getGatewayStatus()`, `getChannelStatus()`, `getMessages()` for health checks and reading threads
+- Supports `dryRun`, `media`, `replyTo`, and `silent` options
 - Used by: SocialBot (draft replies), SahibaBot (WhatsApp sends), and available to all other agents
 
 ### `core/filesystem.js` — Brain File I/O
@@ -196,7 +197,6 @@ HYDRA/
 │   ├── cleanup.js             # Daily file cleanup & log rotation
 │   ├── health-sync.js         # Apple Health CSV → JSON
 │   └── screenpipe-sync.js     # Screenpipe OCR → JSON
-├── openclaw.example.json      # OpenClaw Gateway config template
 ├── ecosystem.config.cjs       # PM2 process manager config
 ├── package.json
 ├── sample.env                 # Full env var reference
@@ -411,30 +411,58 @@ These scripts sync data from local sources into the brain:
 
 ## 🔗 OpenClaw Integration
 
-HYDRA uses [OpenClaw](https://openclaw.ai) as the messaging I/O layer. OpenClaw provides native APIs for WhatsApp, iMessage, Discord, and Telegram — any HYDRA agent can send messages via the shared `core/openclaw.js` client.
+HYDRA uses [OpenClaw](https://docs.openclaw.ai) as the messaging I/O layer. OpenClaw provides a self-hosted gateway for WhatsApp, iMessage, Discord, Telegram, Signal, and more — any HYDRA agent can send messages via the shared `core/openclaw.js` client.
+
+### Prerequisites
+
+- **OpenClaw CLI** installed globally: `npm install -g openclaw@latest`
+- OpenClaw gateway running on the same Mac Mini as HYDRA
 
 ### Setup
 
 ```bash
-# Clone OpenClaw alongside HYDRA
-git clone https://github.com/openclaw/openclaw.git ~/openclaw
-cd ~/openclaw && npm install
+# Install OpenClaw
+npm install -g openclaw@latest
 
-# Copy HYDRA's example config
-cp ~/Documents/HYDRA/openclaw.example.json ~/openclaw/openclaw.json
-# Edit openclaw.json with your API keys
+# Run the interactive onboarding wizard
+openclaw onboard
 
-# Start OpenClaw
-npm start
-# Scan QR code to link WhatsApp
+# Link your WhatsApp account (scan QR code)
+openclaw channels login --channel whatsapp
+
+# Start the gateway (installs as a launchd service)
+openclaw gateway install
+openclaw gateway start
+
+# Verify everything is healthy
+openclaw health
+openclaw channels status
+```
+
+### Configure Incoming Messages
+
+To forward incoming WhatsApp/iMessage messages to HYDRA's SocialBot, add a webhook hook to your OpenClaw config (`~/.openclaw/openclaw.json`):
+
+```bash
+openclaw config set hooks.onMessage "http://127.0.0.1:3004/social/incoming"
 ```
 
 ### How It Works
 
-1. **Incoming:** OpenClaw receives WhatsApp/iMessage/Discord messages → forwards to SocialBot webhook (`http://127.0.0.1:3004/social/incoming`)
+1. **Incoming:** OpenClaw receives WhatsApp/iMessage/Discord messages → forwards to SocialBot webhook (`http://127.0.0.1:3004/social/incoming`) via the `hooks.onMessage` config
 2. **Drafting:** SocialBot drafts a reply using Claude Haiku + personality prompt → posts to Slack `#04-socialbot`
-3. **Approval:** You tap **Send Now** in Slack → HYDRA calls OpenClaw API → message sent natively
+3. **Approval:** You tap **Send Now** in Slack → HYDRA calls `openclaw message send` via CLI → message sent natively
 4. **Any agent** can send messages: `import { sendWhatsApp } from '../core/openclaw.js'`
+
+### Useful Commands
+
+```bash
+openclaw health                    # Gateway health check
+openclaw channels status           # Channel connection status
+openclaw message send --channel whatsapp --target +91... --message "Hi" --dry-run  # Test send
+openclaw message read --channel whatsapp --target +91... --limit 5   # Read recent messages
+openclaw doctor                    # Diagnose issues
+```
 
 ---
 
