@@ -1,0 +1,20 @@
+{
+    "name": "hydra-screenpipe-sync",
+    "version": "1.0.0",
+    "description": "Laptop-side Screenpipe → HYDRA shared brain sync daemon",
+    "type": "module",
+    "main": "sync.js",
+    "scripts": {
+        "start": "node sync.js",
+        "once": "node sync.js --once"
+    },
+    "engines": {
+        "node": ">=22.0.0"
+    },
+    "keywords": [
+        "hydra",
+        "screenpipe",
+        "sync"
+    ],
+    "license": "MIT"
+}

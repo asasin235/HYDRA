@@ -313,6 +313,93 @@ openclaw channels status --probe
 
 ---
 
+## Part 6: Shared Brain (Screen + Audio Context)
+
+HYDRA uses OpenClaw's memory system as a **shared brain** — Screenpipe screen activity from your MacBook Pro and Plaud Note recordings are stored as Markdown files, automatically indexed by OpenClaw, and searchable by all agents.
+
+### 6.1 How It Works
+
+```
+MacBook Pro (Screenpipe)  ──SSH──→  ~/hydra-brain/shared_context/screen/*.md
+Phone (Plaud Note Pro)    ──sync─→  ~/hydra-brain/audio_inbox/ → Whisper → audio/*.md
+HYDRA agents              ──write→  ~/hydra-brain/shared_context/notes/*.md
+                                           │
+                                    OpenClaw auto-indexes all .md files
+                                           │
+                                    openclaw memory search "what was I doing?"
+```
+
+### 6.2 Configure OpenClaw Memory Indexing
+
+Tell OpenClaw to index the shared context directory:
+
+```bash
+openclaw config set agents.defaults.memorySearch.extraPaths '["~/hydra-brain/shared_context"]'
+```
+
+Or from code (one-time setup):
+
+```javascript
+import { setupOpenClawMemoryPaths } from '../core/openclaw-memory.js';
+await setupOpenClawMemoryPaths();
+```
+
+### 6.3 Screenpipe on MacBook Pro (Laptop Side)
+
+See [hydra-screenpipe-sync/README.md](../hydra-screenpipe-sync/README.md) for full setup.
+
+Quick start:
+```bash
+# On your MacBook Pro:
+brew install screenpipe ollama
+ollama pull qwen2.5:7b
+
+cd ~/Desktop/projects/HYDRA/hydra-screenpipe-sync
+cp .env.example .env
+# Edit .env with your Mac Mini IP
+
+node sync.js --once    # test single run
+pm2 start sync.js --name hydra-screenpipe-sync  # daemon
+```
+
+### 6.4 Plaud Note Pro Audio Ingestion
+
+1. Export recordings from Plaud app → iCloud or directly to Mac Mini
+2. Drop audio files (MP3/WAV/M4A) into `~/hydra-brain/audio_inbox/`
+3. The `ingest-audio` PM2 process picks them up, transcribes via Whisper, and writes to the shared brain
+
+```bash
+# Start the audio ingestion daemon
+pm2 start ecosystem.config.cjs --only ingest-audio
+```
+
+### 6.5 Using the Shared Brain in Agents
+
+```javascript
+import {
+  writeScreenActivity,
+  writeAudioTranscript,
+  writeContext,
+  searchContext,
+  readTodayScreenActivity,
+  readRecentContext
+} from '../core/openclaw-memory.js';
+
+// Write a context note from any agent
+await writeContext('architect', 'observation', 'User has been focused on coding for 3 hours');
+
+// Search across all context (screen + audio + notes)
+const results = await searchContext('what was I working on yesterday?');
+
+// Read today's screen activity
+const activity = await readTodayScreenActivity();
+
+// Read last 3 days of audio transcripts
+const audio = await readRecentContext('audio', 3);
+```
+
+---
+
 ## Quick Reference: CLI Commands
 
 | Command | Description |
@@ -323,6 +410,7 @@ openclaw channels status --probe
 | `openclaw message send --channel whatsapp --target +91... --message "Hi"` | Send a message |
 | `openclaw message send ... --dry-run` | Test send (no delivery) |
 | `openclaw message read --channel whatsapp --target +91... --limit 5` | Read recent messages |
+| `openclaw memory search --query "what was I doing?"` | Search shared brain |
 | `openclaw config set <key> <value>` | Update config |
 | `openclaw config get <key>` | Read config |
 | `openclaw doctor` | Diagnose issues |
@@ -335,6 +423,8 @@ openclaw channels status --probe
 
 For more details, see:
 - [OpenClaw Docs](https://docs.openclaw.ai)
-- [HYDRA README](./README.md)
-- [OpenClaw Gateway Protocol](https://docs.openclaw.ai/gateway/protocol)
-- [Multi-Agent Routing](https://docs.openclaw.ai/concepts/multi-agent)
+- [HYDRA README](../README.md)
+- [Screenpipe Sync README](../hydra-screenpipe-sync/README.md)
+- [OpenClaw Memory](https://docs.openclaw.ai/concepts/memory)
+- [OpenClaw Skills](https://docs.openclaw.ai/tools/skills)
+

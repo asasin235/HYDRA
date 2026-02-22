@@ -23,39 +23,33 @@ A multi-agent AI system that manages your entire life — from work productivity
                              │
         ┌────────────────────┼────────────────────┐
         ▼                    ▼                    ▼
-┌──────────────┐   ┌──────────────┐     ┌──────────────┐
-│  core/agent  │   │  core/db     │     │ core/memory  │
-│  (OpenRouter │   │  (SQLite)    │     │  (LanceDB)   │
-│   LLM calls) │   │              │     │  Vector      │
-│  Tool calls  │   │ agent_state  │     │  Search      │
-│  Budget check│   │ debt_tracker │     │              │
-│  Heartbeat   │   │ daily_logs   │     │  memories    │
-└──────┬───────┘   │ paper_trades │     │  daily_logs  │
-       │           │ leads        │     │  reflections │
-       │           └──────┬───────┘     └──────┬───────┘
-       │                  │                    │
-       └──────────────────┼────────────────────┘
+┌──────────────┐   ┌──────────────┐     ┌──────────────────────┐
+│  core/agent  │   │  core/db     │     │ core/openclaw-memory │
+│  (OpenRouter │   │  (SQLite)    │     │  Markdown → OpenClaw │
+│   LLM calls) │   │              │     │  memory_search       │
+│  Tool calls  │   │ agent_state  │     │                      │
+│  Budget check│   │ debt_tracker │     │  shared_context/     │
+│  Heartbeat   │   │ daily_logs   │     │  ├─ screen/    ←─────│── MacBook Pro
+│              │   │ paper_trades │     │  ├─ audio/     ←─────│── Plaud Note
+│              │   │ leads        │     │  └─ notes/           │
+└──────┬───────┘   └──────┬───────┘     └──────┬───────────────┘
+       │                  │                    │ auto-indexed by
+       └──────────────────┼────────────────────┘ OpenClaw Gateway
                           │
          ┌────────────────┼────────────────────┐
          ▼                                     ▼
 ┌──────────────────────┐         ┌──────────────────────┐
-│  Mac Mini Internal   │         │   External SSD       │
-│  ~/hydra-brain/      │         │   /Volumes/HydraSSD/ │
-│                      │         │                      │
-│  brain/              │         │  audio_inbox/        │
-│  ├── 00_ARCHITECT/   │         │  backups/            │
-│  ├── 01_EDMO/        │         │  media/              │
-│  ├── 03_SAHIBA/      │         │  archives/           │
-│  ├── 04_SOCIAL/      │         └──────────────────────┘
-│  ├── 06_CFO/         │
-│  ├── 07_BIOBOT/      │
-│  ├── 09_WOLF/        │
-│  ├── 10_MERCENARY/   │
-│  ├── 11_AUDITOR/     │
-│  ├── usage/          │
-│  └── hydra.db        │
-│  lancedb/            │
-└──────────────────────┘
+│  Mac Mini Internal   │         │  External Sources     │
+│  ~/hydra-brain/      │         │                      │
+│                      │         │  📱 Plaud Note Pro   │
+│  brain/ (agents)     │         │  → audio_inbox/ → 🎤 │
+│  shared_context/     │         │    Whisper → Markdown │
+│  ├─ screen/ (OCR)    │         │                      │
+│  ├─ audio/ (Plaud)   │         │  💻 MacBook Pro      │
+│  └─ notes/ (agents)  │         │  → Screenpipe 24/7   │
+│  lancedb/ (legacy)   │         │  → Ollama summarize  │
+│  hydra.db            │         │  → SSH → screen/*.md  │
+└──────────────────────┘         └──────────────────────┘
 ```
 
 ---
@@ -120,6 +114,20 @@ A multi-agent AI system that manages your entire life — from work productivity
 - Also: `getGatewayStatus()`, `getChannelStatus()`, `getMessages()` for health checks and reading threads
 - Supports `dryRun`, `media`, `replyTo`, and `silent` options
 - Used by: SocialBot (draft replies), SahibaBot (WhatsApp sends), and available to all other agents
+
+### `core/openclaw-memory.js` — Shared Brain (OpenClaw Memory)
+
+- Writes context as Markdown files to `~/hydra-brain/shared_context/` (auto-indexed by OpenClaw)
+- Three data streams: `screen/` (Screenpipe), `audio/` (Plaud Note), `notes/` (agent observations)
+- Exports: `writeScreenActivity()`, `writeAudioTranscript()`, `writeContext()`, `searchContext()`
+- Also: `readTodayScreenActivity()`, `readRecentContext()` for direct file reads
+- `searchContext()` wraps `openclaw memory search` CLI for semantic queries across all data
+
+### `core/memory.js` — Vector Memory (LanceDB, legacy)
+
+- LanceDB tables: `memories`, `daily_logs`, `reflections`
+- Embeddings via OpenRouter (text-embedding-3-small)
+- Used by: agent reflections and daily log storage
 
 ### `core/filesystem.js` — Brain File I/O
 
@@ -186,8 +194,9 @@ HYDRA/
 │   ├── bottleneck.js          # Budget & circuit breaker
 │   ├── db.js                  # SQLite database
 │   ├── filesystem.js          # Brain file I/O
-│   ├── memory.js              # LanceDB vector memory
+│   ├── memory.js              # LanceDB vector memory (legacy)
 │   ├── openclaw.js            # OpenClaw Gateway client (messaging)
+│   ├── openclaw-memory.js     # Shared brain (OpenClaw memory bridge)
 │   └── validate-env.js        # Env var validation
 ├── prompts/                   # System prompts (hot-reloadable)
 │   └── 00-architect.txt       # Example prompt
@@ -196,7 +205,13 @@ HYDRA/
 │   ├── restore.sh             # Restore from B2 backup
 │   ├── cleanup.js             # Daily file cleanup & log rotation
 │   ├── health-sync.js         # Apple Health CSV → JSON
-│   └── screenpipe-sync.js     # Screenpipe OCR → JSON
+│   ├── ingest-audio.js        # Plaud Note audio → Whisper → shared brain
+│   └── screenpipe-sync.js     # Screenpipe OCR → JSON (Mac Mini local)
+├── hydra-screenpipe-sync/     # Laptop-side Screenpipe daemon
+│   ├── sync.js                # Ollama summarizer + SSH sync
+│   ├── package.json
+│   ├── .env.example
+│   └── README.md
 ├── ecosystem.config.cjs       # PM2 process manager config
 ├── package.json
 ├── sample.env                 # Full env var reference

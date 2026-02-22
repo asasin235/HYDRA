@@ -13,6 +13,9 @@ let db = null;
 let memoriesTable = null;
 let dailyLogsTable = null;
 let reflectionsTable = null;
+let screenActivityTable = null;
+let audioTranscriptsTable = null;
+let contextFeedTable = null;
 
 /**
  * Get embedding from OpenRouter using text-embedding-3-small
@@ -65,7 +68,7 @@ async function initDb() {
 
   // Create memories table if not exists
   const tables = await db.tableNames();
-  
+
   if (!tables.includes('memories')) {
     memoriesTable = await db.createTable('memories', [
       {
@@ -119,10 +122,10 @@ async function initDb() {
 export async function addMemory(agent, content) {
   try {
     await initDb();
-    
+
     const id = uuidv4();
     const embedding = await getEmbedding(content);
-    
+
     await memoriesTable.add([{
       id,
       agent,
@@ -130,7 +133,7 @@ export async function addMemory(agent, content) {
       timestamp: new Date().toISOString(),
       vector: embedding
     }]);
-    
+
     return id;
   } catch (error) {
     console.error('[memory] addMemory failed:', error.message);
@@ -148,18 +151,18 @@ export async function addMemory(agent, content) {
 export async function searchMemory(agent, query, limit = 5) {
   try {
     await initDb();
-    
+
     const queryEmbedding = await getEmbedding(query);
-    
+
     let search = memoriesTable.search(queryEmbedding).limit(limit * 2);
-    
+
     const results = await search.toArray();
-    
+
     // Filter by agent if specified
-    let filtered = agent 
+    let filtered = agent
       ? results.filter(r => r.agent === agent)
       : results;
-    
+
     return filtered.slice(0, limit).map(r => ({
       id: r.id,
       agent: r.agent,
@@ -183,10 +186,10 @@ export async function searchMemory(agent, query, limit = 5) {
 export async function addLog(agent, date, summary) {
   try {
     await initDb();
-    
+
     const id = uuidv4();
     const embedding = await getEmbedding(summary);
-    
+
     await dailyLogsTable.add([{
       id,
       agent,
@@ -194,7 +197,7 @@ export async function addLog(agent, date, summary) {
       summary,
       vector: embedding
     }]);
-    
+
     return id;
   } catch (error) {
     console.error('[memory] addLog failed:', error.message);
@@ -212,16 +215,16 @@ export async function addLog(agent, date, summary) {
 export async function searchLogs(agent, query, limit = 5) {
   try {
     await initDb();
-    
+
     const queryEmbedding = await getEmbedding(query);
     let search = dailyLogsTable.search(queryEmbedding).limit(limit * 2);
-    
+
     const results = await search.toArray();
-    
-    let filtered = agent 
+
+    let filtered = agent
       ? results.filter(r => r.agent === agent)
       : results;
-    
+
     return filtered.slice(0, limit).map(r => ({
       id: r.id,
       agent: r.agent,
@@ -245,11 +248,11 @@ export async function searchLogs(agent, query, limit = 5) {
 export async function addReflection(agent, week, data) {
   try {
     await initDb();
-    
+
     const id = uuidv4();
     const content = `Week ${week}: Score ${data.score || 0}. ${JSON.stringify(data.changes || {})}`;
     const embedding = await getEmbedding(content);
-    
+
     await reflectionsTable.add([{
       id,
       agent,
@@ -258,7 +261,7 @@ export async function addReflection(agent, week, data) {
       changes_json: JSON.stringify(data.changes || {}),
       vector: embedding
     }]);
-    
+
     return id;
   } catch (error) {
     console.error('[memory] addReflection failed:', error.message);
@@ -275,13 +278,13 @@ export async function addReflection(agent, week, data) {
 export async function getReflections(agent, limit = 10) {
   try {
     await initDb();
-    
+
     // Use a generic query embedding for recent reflections
     const queryEmbedding = await getEmbedding(`${agent} weekly reflection performance`);
     let search = reflectionsTable.search(queryEmbedding).limit(limit * 2);
-    
+
     const results = await search.toArray();
-    
+
     return results
       .filter(r => r.agent === agent)
       .slice(0, limit)
