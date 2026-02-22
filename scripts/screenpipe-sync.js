@@ -1,8 +1,7 @@
 /**
- * screenpipe-sync.js — runs on MacBook Pro via PM2
+ * screenpipe-sync.js — runs on Mac Mini
  * Every 5 minutes: reads Screenpipe SQLite, filters relevant OCR entries,
- * writes JSON to SMB share (brain/01_EDMO/screen_context/).
- * Falls back to local buffer if SMB unavailable.
+ * writes JSON to brain storage (brain/01_EDMO/screen_context/).
  */
 import Database from 'better-sqlite3';
 import fs from 'fs-extra';
@@ -12,11 +11,9 @@ import os from 'os';
 const SCREENPIPE_DB = process.env.SCREENPIPE_DB ||
   path.join(os.homedir(), 'Library', 'Application Support', 'screenpipe', 'db.sqlite');
 
-const SMB_SCREEN_CTX = process.env.SCREENPIPE_SMB_CTX ||
-  path.join(process.env.PI_SMB_PATH || '/Volumes/brain', 'brain', '01_EDMO', 'screen_context');
-
-const BUFFER_DIR = process.env.SCREENPIPE_BUFFER ||
-  path.join(os.homedir(), 'hydra-buffer', 'screen_context');
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
+const SCREEN_CTX_DIR = process.env.SCREENPIPE_CTX_DIR ||
+  path.join(BRAIN_PATH, 'brain', '01_EDMO', 'screen_context');
 
 const MAX_FILES = 100;
 const INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -29,35 +26,6 @@ function openDb() {
   } catch (e) {
     console.error('[screenpipe-sync] Cannot open Screenpipe DB:', e.message);
     return null;
-  }
-}
-
-async function isSmbAvailable() {
-  try {
-    await fs.ensureDir(SMB_SCREEN_CTX);
-    const testFile = path.join(SMB_SCREEN_CTX, '.write_test');
-    await fs.writeFile(testFile, 'ok');
-    await fs.remove(testFile);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function flushBuffer(targetDir) {
-  try {
-    const exists = await fs.pathExists(BUFFER_DIR);
-    if (!exists) return;
-    const files = await fs.readdir(BUFFER_DIR);
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      const src = path.join(BUFFER_DIR, f);
-      const dst = path.join(targetDir, f);
-      await fs.move(src, dst, { overwrite: true });
-    }
-    console.log(`[screenpipe-sync] Flushed ${files.length} buffered files to SMB.`);
-  } catch (e) {
-    console.error('[screenpipe-sync] Buffer flush error:', e.message);
   }
 }
 
@@ -115,18 +83,10 @@ async function sync() {
       timestamp: e.timestamp
     }));
 
-    const smbOk = await isSmbAvailable();
-    if (smbOk) {
-      await flushBuffer(SMB_SCREEN_CTX);
-      await fs.writeJson(path.join(SMB_SCREEN_CTX, filename), payload);
-      await pruneOldFiles(SMB_SCREEN_CTX);
-      console.log(`[screenpipe-sync] Written ${payload.length} entries → SMB (${filename})`);
-    } else {
-      await fs.ensureDir(BUFFER_DIR);
-      await fs.writeJson(path.join(BUFFER_DIR, filename), payload);
-      await pruneOldFiles(BUFFER_DIR);
-      console.warn(`[screenpipe-sync] SMB unavailable — buffered to ~/hydra-buffer (${filename})`);
-    }
+    await fs.ensureDir(SCREEN_CTX_DIR);
+    await fs.writeJson(path.join(SCREEN_CTX_DIR, filename), payload);
+    await pruneOldFiles(SCREEN_CTX_DIR);
+    console.log(`[screenpipe-sync] Written ${payload.length} entries → ${filename}`);
   } catch (e) {
     console.error('[screenpipe-sync] sync error:', e.message);
   } finally {

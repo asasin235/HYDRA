@@ -11,7 +11,7 @@ import { appendBrain } from '../core/filesystem.js';
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN;
-const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 
 function assertEnv() {
   const missing = [];
@@ -76,7 +76,7 @@ function getOrCreateAgent(name) {
 // Utility to write pending action results
 async function writePendingAction(agentName, approved) {
   try {
-    const nsDir = path.join(PI_SMB_PATH, 'brain', agentName);
+    const nsDir = path.join(BRAIN_PATH, 'brain', agentName);
     await fs.ensureDir(nsDir);
     const file = path.join(nsDir, 'pending_action.json');
     await fs.writeJson(file, { approved, ts: Date.now() }, { spaces: 2 });
@@ -172,7 +172,6 @@ app.action('hydra_reject', async ({ body, ack, say }) => {
 // ── Reflection approval handler ─────────────────────────────────────────────
 
 async function applyReflectionChanges(agentName, weekNum) {
-  const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
   const AGENT_NS_MAP = {
     '00-architect': '00_ARCHITECT', '01-edmobot': '01_EDMO', '02-brandbot': '02_BRAND',
     '03-sahibabot': '03_SAHIBA', '05-jarvis': '05_JARVIS', '06-cfobot': '06_CFO',
@@ -247,8 +246,20 @@ app.action('reflect_skip', async ({ body, ack, say }) => {
 // SabihaBot message draft actions
 app.action('sabiha_send', async ({ body, ack, say }) => {
   await ack();
-  const value = (body.actions?.[0]?.value || '').replace(/^send:/, '');
-  await say({ text: `📤 Message to send: "${value}"` });
+  try {
+    const value = (body.actions?.[0]?.value || '').replace(/^send:/, '');
+    const { sendWhatsApp } = await import('../core/openclaw.js');
+    const result = await sendWhatsApp('Sabiha', value);
+    if (result.success) {
+      await say({ text: `📤 Sent to Sabiha via WhatsApp: "${value}"` });
+    } else {
+      await say({ text: `❌ WhatsApp send failed: ${result.error}\n📋 Message: "${value}"` });
+    }
+  } catch (e) {
+    console.error('[slack-gateway] sabiha_send error:', e.message);
+    const value = (body.actions?.[0]?.value || '').replace(/^send:/, '');
+    await say({ text: `❌ Error: ${e.message}\n📋 Message was: "${value}"` });
+  }
 });
 app.action('sabiha_edit', async ({ body, ack, say }) => {
   await ack();
@@ -258,6 +269,59 @@ app.action('sabiha_edit', async ({ body, ack, say }) => {
 app.action('sabiha_discard', async ({ body, ack, say }) => {
   await ack();
   await say({ text: '🗑️ Draft discarded.' });
+});
+
+// SocialBot message actions
+app.action('social_send', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const draftId = body.actions?.[0]?.value || '';
+    if (!draftId) {
+      await say({ text: '❌ No draft ID found.' });
+      return;
+    }
+    // Dynamically import to avoid circular deps
+    const { executeSend } = await import('./04-socialbot.js');
+    const result = await executeSend(draftId);
+    if (result.success) {
+      await say({ text: `📤 Sent to ${result.contact} on ${result.app}!` });
+    } else {
+      await say({ text: `❌ Send failed: ${result.error}` });
+    }
+  } catch (e) {
+    console.error('[slack-gateway] social_send error:', e.message);
+    await say({ text: `❌ Error: ${e.message}` });
+  }
+});
+
+app.action('social_edit', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const draftId = body.actions?.[0]?.value || '';
+    const { getDraft } = await import('./04-socialbot.js');
+    const draft = await getDraft(draftId);
+    if (draft) {
+      await say({ text: `✏️ Edit draft for *${draft.contact}* (${draft.app}):\n\`\`\`${draft.message}\`\`\`\nReply in thread with your edited message, then use \`@hydra socialbot send ${draftId}\` to send.` });
+    } else {
+      await say({ text: '❌ Draft not found (may have expired).' });
+    }
+  } catch (e) {
+    console.error('[slack-gateway] social_edit error:', e.message);
+    await say({ text: `❌ Error: ${e.message}` });
+  }
+});
+
+app.action('social_discard', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const draftId = body.actions?.[0]?.value || '';
+    const { removeDraft } = await import('./04-socialbot.js');
+    await removeDraft(draftId);
+    await say({ text: '🗑️ Social draft discarded.' });
+  } catch (e) {
+    console.error('[slack-gateway] social_discard error:', e.message);
+    await say({ text: `❌ Error: ${e.message}` });
+  }
 });
 
 // /hydra-status command
@@ -280,7 +344,7 @@ app.command('/hydra-status', async ({ ack, respond }) => {
 
     // Token spend today for known agents in ecosystem
     const agentNames = [
-      '00-architect','01-edmobot','02-brandbot','03-sahibabot','05-jarvis','06-cfobot','07-biobot','09-wolf','10-mercenary','11-auditor','99-slack-gateway'
+      '00-architect','01-edmobot','02-brandbot','03-sahibabot','04-socialbot','05-jarvis','06-cfobot','07-biobot','09-wolf','10-mercenary','11-auditor','99-slack-gateway'
     ];
     const today = await Promise.all(agentNames.map(async n => ({ name: n, ...(await getTodaySpend(n)) })));
     const todayTotal = today.reduce((sum, a) => sum + (a.cost || 0), 0);

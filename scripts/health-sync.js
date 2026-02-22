@@ -1,7 +1,7 @@
 /**
- * health-sync.js — runs on MacBook Pro via PM2
+ * health-sync.js — runs on Mac Mini
  * Cron 5:45AM: scans for 'Health Auto Export' iOS app CSV files,
- * parses health metrics, writes consolidated JSON to brain SMB share.
+ * parses health metrics, writes consolidated JSON to brain storage.
  */
 import fs from 'fs-extra';
 import path from 'path';
@@ -15,8 +15,8 @@ const DOWNLOADS_DIR = process.env.HEALTH_CSV_SOURCE ||
 const ICLOUD_HEALTH_DIR = process.env.HEALTH_ICLOUD_DIR ||
   path.join(os.homedir(), 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'HealthAutoExport');
 
-const SMB_HEALTH_DIR = process.env.HEALTH_SMB_DIR ||
-  path.join(process.env.PI_SMB_PATH || '/Volumes/brain', 'brain', '07_BIOBOT', 'health_data');
+const HEALTH_DATA_DIR = process.env.HEALTH_DATA_DIR ||
+  path.join(process.env.BRAIN_PATH || './brain', 'brain', '07_BIOBOT', 'health_data');
 
 // Parse CSV with minimal deps — no external csv package needed
 function parseCSV(content) {
@@ -124,7 +124,7 @@ async function syncHealthData() {
     }
 
     const today = new Date().toISOString().split('T')[0];
-    await fs.ensureDir(SMB_HEALTH_DIR);
+    await fs.ensureDir(HEALTH_DATA_DIR);
 
     let processed = 0;
     for (const csvPath of csvFiles) {
@@ -148,7 +148,7 @@ async function syncHealthData() {
         for (const date of [...dates].sort().slice(-7)) {
           const metrics = parseMetrics(rows, date);
           if (!metrics) continue;
-          const outFile = path.join(SMB_HEALTH_DIR, `${date}.json`);
+          const outFile = path.join(HEALTH_DATA_DIR, `${date}.json`);
           // Merge with existing if file exists
           if (await fs.pathExists(outFile)) {
             const existing = await fs.readJson(outFile);
@@ -169,7 +169,7 @@ async function syncHealthData() {
     }
 
     if (processed > 0) {
-      console.log(`[health-sync] Done. ${processed} CSV file(s) processed → ${SMB_HEALTH_DIR}`);
+      console.log(`[health-sync] Done. ${processed} CSV file(s) processed → ${HEALTH_DATA_DIR}`);
     }
   } catch (e) {
     console.error('[health-sync] sync error:', e.message);

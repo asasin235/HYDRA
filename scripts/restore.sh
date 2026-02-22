@@ -6,8 +6,8 @@ set -euo pipefail
 : "${B2_BUCKET:?Missing B2_BUCKET}"
 : "${RCLONE_CRYPT_PASSWORD:?Missing RCLONE_CRYPT_PASSWORD}"
 
-PI_SMB_PATH="${PI_SMB_PATH:-./brain}"
-BRAIN_DIR="$PI_SMB_PATH/brain"
+BRAIN_PATH="${BRAIN_PATH:-./brain}"
+BRAIN_DIR="$BRAIN_PATH/brain"
 
 if ! command -v rclone >/dev/null 2>&1; then
   echo "rclone not found; attempting to install..."

@@ -23,7 +23,7 @@ const architect = new Agent({
 });
 
 const AGENTS = [
-  '00-architect','01-edmobot','02-brandbot','03-sahibabot','05-jarvis','06-cfobot','07-biobot','09-wolf','10-mercenary','11-auditor','99-slack-gateway'
+  '00-architect','01-edmobot','02-brandbot','03-sahibabot','04-socialbot','05-jarvis','06-cfobot','07-biobot','09-wolf','10-mercenary','11-auditor','99-slack-gateway'
 ];
 
 async function postSlack(text) {
@@ -109,11 +109,12 @@ async function buildEveningSummary() {
 }
 
 // Watchdog: check agent heartbeats every 30 minutes
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const AGENT_NAMESPACES = {
   '01-edmobot':      '01_EDMO',
   '02-brandbot':     '02_BRAND',
   '03-sahibabot':    '03_SAHIBA',
+  '04-socialbot':    '04_SOCIAL',
   '05-jarvis':       '05_JARVIS',
   '06-cfobot':       '06_CFO',
   '07-biobot':       '07_BIO',

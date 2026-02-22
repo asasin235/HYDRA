@@ -2,8 +2,8 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs-extra';
 
-const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
-const DB_PATH = path.join(PI_SMB_PATH, 'brain', 'hydra.db');
+const BRAIN_BASE = process.env.BRAIN_PATH || './brain';
+const DB_PATH = path.join(BRAIN_BASE, 'brain', 'hydra.db');
 
 // Ensure brain directory exists
 fs.ensureDirSync(path.dirname(DB_PATH));

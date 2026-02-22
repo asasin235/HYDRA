@@ -15,7 +15,7 @@ validateEnv();
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#03-sahibabot';
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const SAHIBA_DIR = path.join(BRAIN_PATH, 'brain', '03_SABIHA');
 const MEMORIES_DIR = path.join(SAHIBA_DIR, 'memories');
 

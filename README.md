@@ -2,7 +2,7 @@
 
 > **H**yper **Y**ielding **D**ecision & **R**esource **A**gent
 
-A multi-agent AI system that manages your entire life — from work productivity and finances to health, relationships, home automation, investments, and freelance income. Built on Node.js, powered by multiple LLMs via OpenRouter, orchestrated through Slack, and backed by a Raspberry Pi 5 "brain" over SMB.
+A multi-agent AI system that manages your entire life — from work productivity and finances to health, relationships, home automation, investments, and freelance income. Built on Node.js, powered by multiple LLMs via OpenRouter, orchestrated through Slack, running on a Mac Mini with an external SSD for heavy data.
 
 ---
 
@@ -35,44 +35,48 @@ A multi-agent AI system that manages your entire life — from work productivity
        │           └──────┬───────┘     └──────┬───────┘
        │                  │                    │
        └──────────────────┼────────────────────┘
-                          ▼
-              ┌───────────────────────┐
-              │   /brain (SMB Share)  │
-              │   Raspberry Pi 5      │
-              │                       │
-              │  00_ARCHITECT/        │
-              │  01_EDMO/             │
-              │  03_SAHIBA/           │
-              │  06_CFO/              │
-              │  07_BIOBOT/           │
-              │  09_WOLF/             │
-              │  10_MERCENARY/        │
-              │  11_AUDITOR/          │
-              │  usage/               │
-              │  lancedb/             │
-              │  hydra.db             │
-              └───────────────────────┘
+                          │
+         ┌────────────────┼────────────────────┐
+         ▼                                     ▼
+┌──────────────────────┐         ┌──────────────────────┐
+│  Mac Mini Internal   │         │   External SSD       │
+│  ~/hydra-brain/      │         │   /Volumes/HydraSSD/ │
+│                      │         │                      │
+│  brain/              │         │  audio_inbox/        │
+│  ├── 00_ARCHITECT/   │         │  backups/            │
+│  ├── 01_EDMO/        │         │  media/              │
+│  ├── 03_SAHIBA/      │         │  archives/           │
+│  ├── 04_SOCIAL/      │         └──────────────────────┘
+│  ├── 06_CFO/         │
+│  ├── 07_BIOBOT/      │
+│  ├── 09_WOLF/        │
+│  ├── 10_MERCENARY/   │
+│  ├── 11_AUDITOR/     │
+│  ├── usage/          │
+│  └── hydra.db        │
+│  lancedb/            │
+└──────────────────────┘
 ```
 
 ---
 
 ## 🤖 Agent Registry
 
-| #      | Agent           | Model                     | Purpose                                                                      | Schedule                                     |
-| ------ | --------------- | ------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------- |
-| **00** | `architect`     | Gemini Flash 3            | Meta-strategist: morning/evening briefs, agent watchdog, goal tracking       | 6AM / 10PM daily, watchdog every 30m         |
-| **01** | `edmobot`       | Claude Sonnet 4           | Work productivity: Screenpipe context, Jira tickets, work briefs             | 9AM daily, Friday 5PM weekly perf            |
-| **02** | `brandbot`      | Mistral Small             | Personal brand: GitHub activity → LinkedIn drafts, lead qualification        | Monday 10AM                                  |
-| **03** | `sahibabot`     | Mistral Small + Haiku 4.5 | Relationship health: nudges, promise tracking, WhatsApp drafts               | 4PM daily nudge, Monday events, 8PM promises |
-| **04** | _ParentBot_     | —                         | 🔒 Reserved for Phase 2 (family relationship management)                     | —                                            |
-| **05** | `jarvis`        | Gemini Flash 3            | Home automation via Home Assistant: AC, lights, sleep mode, sensors          | Every 30m automation check                   |
-| **06** | `cfobot`        | DeepSeek R1               | Personal CFO: SMS spending analysis, debt payoff, wedding fund               | 11PM nightly, 1st of month projection        |
-| **07** | `biobot`        | Gemini Flash 3            | Health tracker: Apple Health sync, HRV readiness, streak tracking            | 6AM / 10PM briefs, 3PM walk nudge            |
-| **08** | _CareerBot_     | —                         | 🔒 Reserved for Phase 2 (career strategy & skill gaps)                       | —                                            |
-| **09** | `wolf`          | DeepSeek R1               | Paper trading: Nifty stock analysis via Perplexity, ₹1L virtual capital      | Weekdays 9:30AM & 3:30PM, Sunday review      |
-| **10** | `mercenary`     | Claude Sonnet 4           | Freelance pipeline: lead evaluation, proposal generation, invoicing          | 8PM daily lead scan                          |
-| **11** | `auditor`       | Gemini Flash 3            | Weekly reflection: scores all agents, proposes prompt changes, auto-rollback | Sunday 10PM                                  |
-| **99** | `slack-gateway` | —                         | Slack Bolt app: message routing, action handlers, `/hydra-status`            | Always-on (Socket Mode)                      |
+| #      | Agent           | Model                     | Purpose                                                                             | Schedule                                     |
+| ------ | --------------- | ------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| **00** | `architect`     | Gemini Flash 3            | Meta-strategist: morning/evening briefs, agent watchdog, goal tracking              | 6AM / 10PM daily, watchdog every 30m         |
+| **01** | `edmobot`       | Claude Sonnet 4           | Work productivity: Screenpipe context, Jira tickets, work briefs                    | 9AM daily, Friday 5PM weekly perf            |
+| **02** | `brandbot`      | Mistral Small             | Personal brand: GitHub activity → LinkedIn drafts, lead qualification               | Monday 10AM                                  |
+| **03** | `sahibabot`     | Mistral Small + Haiku 4.5 | Relationship health: nudges, promise tracking, WhatsApp drafts                      | 4PM daily nudge, Monday events, 8PM promises |
+| **04** | `socialbot`     | Claude Haiku 4.5          | Social proxy: drafts WhatsApp/iMessage/Discord replies via Screenpipe + AppleScript | Every 2min scan, 9PM daily summary           |
+| **05** | `jarvis`        | Gemini Flash 3            | Home automation via Home Assistant: AC, lights, sleep mode, sensors                 | Every 30m automation check                   |
+| **06** | `cfobot`        | DeepSeek R1               | Personal CFO: SMS spending analysis, debt payoff, wedding fund                      | 11PM nightly, 1st of month projection        |
+| **07** | `biobot`        | Gemini Flash 3            | Health tracker: Apple Health sync, HRV readiness, streak tracking                   | 6AM / 10PM briefs, 3PM walk nudge            |
+| **08** | _CareerBot_     | —                         | 🔒 Reserved for Phase 2 (career strategy & skill gaps)                              | —                                            |
+| **09** | `wolf`          | DeepSeek R1               | Paper trading: Nifty stock analysis via Perplexity, ₹1L virtual capital             | Weekdays 9:30AM & 3:30PM, Sunday review      |
+| **10** | `mercenary`     | Claude Sonnet 4           | Freelance pipeline: lead evaluation, proposal generation, invoicing                 | 8PM daily lead scan                          |
+| **11** | `auditor`       | Gemini Flash 3            | Weekly reflection: scores all agents, proposes prompt changes, auto-rollback        | Sunday 10PM                                  |
+| **99** | `slack-gateway` | —                         | Slack Bolt app: message routing, action handlers, `/hydra-status`                   | Always-on (Socket Mode)                      |
 
 ---
 
@@ -99,14 +103,22 @@ A multi-agent AI system that manages your entire life — from work productivity
 ### `core/db.js` — SQLite (better-sqlite3)
 
 - Tables: `agent_state`, `debt_tracker`, `daily_logs`, `paper_trades`, `leads`
-- WAL mode with 5s busy timeout for concurrent access over SMB
-- Stored on the Raspberry Pi brain share (`hydra.db`)
+- WAL mode with 5s busy timeout
+- Stored on Mac Mini internal storage (`~/hydra-brain/brain/hydra.db`)
 
 ### `core/memory.js` — Vector Memory (LanceDB)
 
 - Embedding model: `text-embedding-3-small` (1536 dimensions) via OpenRouter
 - Tables: `memories`, `daily_logs`, `reflections`
 - Semantic search across agent memories with optional agent filtering
+- Stored on Mac Mini internal storage (`~/hydra-brain/lancedb/`)
+
+### `core/openclaw.js` — Messaging Gateway Client
+
+- Shared client for OpenClaw Gateway — **any agent** can send messages
+- Exports: `sendMessage()`, `sendWhatsApp()`, `sendIMessage()`, `sendDiscord()`, `sendTelegram()`
+- Also: `getGatewayStatus()`, `getMessages()` for reading recent threads
+- Used by: SocialBot (draft replies), SahibaBot (WhatsApp sends), and available to all other agents
 
 ### `core/filesystem.js` — Brain File I/O
 
@@ -117,13 +129,35 @@ A multi-agent AI system that manages your entire life — from work productivity
 
 ### `core/auth.js` — Inter-Service Auth
 
-- Bearer token authentication for Mac Mini ↔ Pi 5 API calls
+- Bearer token authentication for inter-service API calls
 - Express middleware (`validateRequest`) and authenticated fetch (`signedFetch`)
 
 ### `core/validate-env.js` — Startup Validation
 
 - Checks all required environment variables before any agent starts
 - Fails fast with clear error messages
+
+---
+
+## 💾 Storage Architecture
+
+### Mac Mini Internal Storage (`BRAIN_PATH`)
+
+Core data that requires fast I/O — kept on the Mac Mini's internal SSD:
+
+- **SQLite database** (`hydra.db`) — agent state, debt tracker, daily logs, trades, leads
+- **LanceDB** — vector embeddings for semantic memory search
+- **Agent namespaces** — heartbeats, daily logs, configuration, reflections
+- **Usage tracking** — monthly token spend, circuit breaker state
+
+### External SSD (`EXTERNAL_SSD_PATH`)
+
+Bulk/heavy data that doesn't need SSD-speed access:
+
+- **Audio inbox** — voice recordings awaiting transcription
+- **Backups** — staging area for B2 encrypted backups
+- **Media** — large files, screenshots, exports
+- **Archives** — old data moved from brain for long-term retention
 
 ---
 
@@ -136,7 +170,7 @@ HYDRA/
 │   ├── 01-edmobot.js          # Work productivity
 │   ├── 02-brandbot.js         # Personal branding
 │   ├── 03-sahibabot.js        # Relationship health
-│   ├── 04-RESERVED.md         # ParentBot (Phase 2)
+│   ├── 04-socialbot.js        # Social proxy (WhatsApp/iMessage/Discord)
 │   ├── 05-jarvis.js           # Home automation
 │   ├── 06-cfobot.js           # Personal finance
 │   ├── 07-biobot.js           # Health & fitness
@@ -152,6 +186,7 @@ HYDRA/
 │   ├── db.js                  # SQLite database
 │   ├── filesystem.js          # Brain file I/O
 │   ├── memory.js              # LanceDB vector memory
+│   ├── openclaw.js            # OpenClaw Gateway client (messaging)
 │   └── validate-env.js        # Env var validation
 ├── prompts/                   # System prompts (hot-reloadable)
 │   └── 00-architect.txt       # Example prompt
@@ -159,8 +194,9 @@ HYDRA/
 │   ├── backup.sh              # Encrypted B2 backup via rclone
 │   ├── restore.sh             # Restore from B2 backup
 │   ├── cleanup.js             # Daily file cleanup & log rotation
-│   ├── health-sync.js         # Apple Health CSV → JSON (MBP)
-│   └── screenpipe-sync.js     # Screenpipe OCR → JSON (MBP)
+│   ├── health-sync.js         # Apple Health CSV → JSON
+│   └── screenpipe-sync.js     # Screenpipe OCR → JSON
+├── openclaw.example.json      # OpenClaw Gateway config template
 ├── ecosystem.config.cjs       # PM2 process manager config
 ├── package.json
 ├── sample.env                 # Full env var reference
@@ -174,9 +210,10 @@ HYDRA/
 
 ### Prerequisites
 
+- **Mac Mini** (primary host for all agents)
 - **Node.js** ≥ 22.0.0
 - **PM2** (installed as dependency, or globally: `npm i -g pm2`)
-- **Raspberry Pi 5** with SMB share mounted (for brain storage)
+- **External SSD** connected to Mac Mini (for heavy data storage)
 - **Slack workspace** with a Bolt app configured for Socket Mode
 - **OpenRouter API key** for LLM access
 
@@ -193,25 +230,29 @@ npm install
 # Copy and configure environment variables
 cp sample.env .env
 # Edit .env with your API keys, tokens, and paths
+
+# Create brain directory
+mkdir -p ~/hydra-brain/brain
 ```
 
 ### Configuration
 
 Copy `sample.env` to `.env` and fill in all required values:
 
-| Variable               | Required | Description                                        |
-| ---------------------- | -------- | -------------------------------------------------- |
-| `OPENROUTER_API_KEY`   | ✅       | OpenRouter API key for all LLM calls               |
-| `SLACK_BOT_TOKEN`      | ✅       | Slack Bot User OAuth Token (`xoxb-...`)            |
-| `SLACK_SIGNING_SECRET` | ✅       | Slack app signing secret                           |
-| `SLACK_APP_TOKEN`      | ✅       | Slack App-Level Token for Socket Mode (`xapp-...`) |
-| `PI_SMB_PATH`          | ✅       | Path to mounted brain directory                    |
-| `HOME_ASSISTANT_URL`   | ✅       | Home Assistant instance URL                        |
-| `HOME_ASSISTANT_TOKEN` | ✅       | Home Assistant long-lived access token             |
-| `INTERNAL_API_KEY`     | ✅       | Shared key for Mac ↔ Pi communication              |
-| `B2_ACCOUNT_ID`        | ✅       | Backblaze B2 account ID                            |
-| `B2_APP_KEY`           | ✅       | Backblaze B2 application key                       |
-| `B2_BUCKET`            | ✅       | B2 bucket name (default: `hydra-backup`)           |
+| Variable               | Required | Description                                                |
+| ---------------------- | -------- | ---------------------------------------------------------- |
+| `OPENROUTER_API_KEY`   | ✅       | OpenRouter API key for all LLM calls                       |
+| `SLACK_BOT_TOKEN`      | ✅       | Slack Bot User OAuth Token (`xoxb-...`)                    |
+| `SLACK_SIGNING_SECRET` | ✅       | Slack app signing secret                                   |
+| `SLACK_APP_TOKEN`      | ✅       | Slack App-Level Token for Socket Mode (`xapp-...`)         |
+| `BRAIN_PATH`           | ✅       | Path to brain directory on Mac Mini (e.g. `~/hydra-brain`) |
+| `EXTERNAL_SSD_PATH`    | 🔶       | Path to external SSD (e.g. `/Volumes/HydraSSD`)            |
+| `HOME_ASSISTANT_URL`   | ✅       | Home Assistant instance URL                                |
+| `HOME_ASSISTANT_TOKEN` | ✅       | Home Assistant long-lived access token                     |
+| `INTERNAL_API_KEY`     | ✅       | Shared key for inter-service communication                 |
+| `B2_ACCOUNT_ID`        | ✅       | Backblaze B2 account ID                                    |
+| `B2_APP_KEY`           | ✅       | Backblaze B2 application key                               |
+| `B2_BUCKET`            | ✅       | B2 bucket name (default: `hydra-backup`)                   |
 
 See `sample.env` for the full list including optional variables for each agent.
 
@@ -261,6 +302,7 @@ npm run stop      # pm2 stop all
 
 - **Reflection approve/skip buttons** — approve or skip prompt changes proposed by the auditor
 - **SabihaBot message drafts** — send, edit, or discard drafted WhatsApp messages
+- **SocialBot draft reviews** — Send Now / Edit / Discard for auto-drafted chat replies
 - **Approve/reject actions** — general-purpose agent action approvals
 
 ---
@@ -347,9 +389,9 @@ The Architect agent checks heartbeats every 30 minutes. If any online agent hasn
 
 ---
 
-## 📱 Companion Scripts (MacBook Pro)
+## 📱 Companion Scripts
 
-These scripts run on the MacBook Pro and sync data to the Pi brain share:
+These scripts sync data from local sources into the brain:
 
 ### `scripts/health-sync.js`
 
@@ -364,18 +406,44 @@ These scripts run on the MacBook Pro and sync data to the Pi brain share:
 - Reads Screenpipe SQLite database for OCR captures
 - Filters for relevant apps (Cursor, Slack, Jira, Chrome, Terminal, etc.)
 - Writes JSON to `brain/01_EDMO/screen_context/`
-- Falls back to local buffer (`~/hydra-buffer/`) if SMB is unavailable
+
+---
+
+## 🔗 OpenClaw Integration
+
+HYDRA uses [OpenClaw](https://openclaw.ai) as the messaging I/O layer. OpenClaw provides native APIs for WhatsApp, iMessage, Discord, and Telegram — any HYDRA agent can send messages via the shared `core/openclaw.js` client.
+
+### Setup
+
+```bash
+# Clone OpenClaw alongside HYDRA
+git clone https://github.com/openclaw/openclaw.git ~/openclaw
+cd ~/openclaw && npm install
+
+# Copy HYDRA's example config
+cp ~/Documents/HYDRA/openclaw.example.json ~/openclaw/openclaw.json
+# Edit openclaw.json with your API keys
+
+# Start OpenClaw
+npm start
+# Scan QR code to link WhatsApp
+```
+
+### How It Works
+
+1. **Incoming:** OpenClaw receives WhatsApp/iMessage/Discord messages → forwards to SocialBot webhook (`http://127.0.0.1:3004/social/incoming`)
+2. **Drafting:** SocialBot drafts a reply using Claude Haiku + personality prompt → posts to Slack `#04-socialbot`
+3. **Approval:** You tap **Send Now** in Slack → HYDRA calls OpenClaw API → message sent natively
+4. **Any agent** can send messages: `import { sendWhatsApp } from '../core/openclaw.js'`
 
 ---
 
 ## 🗺️ Roadmap
 
 - [ ] **Phase 2 Agents**
-  - `04-parentbot` — Family relationship management
   - `08-careerbot` — Career strategy, resume tracking, salary benchmarking
 - [ ] **Dashboard** — Web UI for HYDRA status, agent logs, and controls
 - [ ] **Voice Interface** — Audio commands via Whisper transcription
-- [ ] **WhatsApp Integration** — Direct message sending for SahibaBot
 - [ ] **Real NSE API** — Live market data for Wolf paper trading
 - [ ] **SMS Automation** — Auto-scrape transaction SMS for CFOBot
 
@@ -386,6 +454,7 @@ These scripts run on the MacBook Pro and sync data to the Pi brain share:
 | Layer           | Technology                                                                          |
 | --------------- | ----------------------------------------------------------------------------------- |
 | Runtime         | Node.js ≥ 22 (ESM)                                                                  |
+| Host            | Mac Mini (all agents run locally)                                                   |
 | LLM Gateway     | OpenRouter (Gemini Flash 3, Claude Sonnet 4, DeepSeek R1, Mistral Small, Haiku 4.5) |
 | Process Manager | PM2                                                                                 |
 | Database        | better-sqlite3 (WAL mode)                                                           |
@@ -394,8 +463,10 @@ These scripts run on the MacBook Pro and sync data to the Pi brain share:
 | Chat Interface  | Slack Bolt (Socket Mode)                                                            |
 | Home Automation | Home Assistant REST API                                                             |
 | Market Research | Perplexity API (Sonar)                                                              |
+| Messaging       | OpenClaw Gateway (WhatsApp, iMessage, Discord, Telegram)                            |
 | Backup          | rclone + Backblaze B2 (encrypted)                                                   |
-| Brain Storage   | Raspberry Pi 5 SMB share                                                            |
+| Brain Storage   | Mac Mini internal SSD                                                               |
+| Heavy Data      | External SSD                                                                        |
 
 ---
 

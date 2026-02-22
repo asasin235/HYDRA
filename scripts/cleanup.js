@@ -7,8 +7,8 @@ import util from 'util';
 
 const exec = util.promisify(_exec);
 
-const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
-const BRAIN_ROOT = path.join(PI_SMB_PATH, 'brain');
+const BRAIN_BASE = process.env.BRAIN_PATH || './brain';
+const BRAIN_ROOT = path.join(BRAIN_BASE, 'brain');
 const LOGS_DIR = path.join(process.cwd(), 'logs');
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const STATUS_CHANNEL = process.env.SLACK_STATUS_CHANNEL || '#hydra-status';

@@ -12,7 +12,7 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#02-brandbot';
 const GITHUB_USERNAME = process.env.GITHUB_USERNAME || '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const MERCENARY_LEADS_FILE = path.join(BRAIN_PATH, 'brain', '10_MERCENARY', 'leads_inbox.json');
 
 const brand = new Agent({

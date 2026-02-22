@@ -3,8 +3,8 @@ import path from 'path';
 import fs from 'fs-extra';
 import { v4 as uuidv4 } from 'uuid';
 
-const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
-const LANCEDB_PATH = path.join(PI_SMB_PATH, 'lancedb');
+const BRAIN_BASE = process.env.BRAIN_PATH || './brain';
+const LANCEDB_PATH = path.join(BRAIN_BASE, 'lancedb');
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const EMBEDDING_MODEL = 'openai/text-embedding-3-small';
 const EMBEDDING_DIM = 1536; // text-embedding-3-small dimension

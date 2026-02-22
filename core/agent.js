@@ -7,7 +7,7 @@ import { brainPath, appendBrain, writeBrain } from './filesystem.js';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const HEALTH_PORT = Number(process.env.HEALTH_PORT || 3002);
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 
 // ── Shared health-check Express app (one server for all agents) ───────────────
 const _healthApp = express();

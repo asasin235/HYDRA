@@ -4,7 +4,7 @@ export function validateEnv() {
     'SLACK_BOT_TOKEN',
     'SLACK_SIGNING_SECRET',
     'SLACK_APP_TOKEN',
-    'PI_SMB_PATH',
+    'BRAIN_PATH',
     'HOME_ASSISTANT_URL',
     'HOME_ASSISTANT_TOKEN',
     'DASHBOARD_TOKEN',

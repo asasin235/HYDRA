@@ -10,7 +10,7 @@ validateEnv();
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#01-edmobot';
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const SCREEN_CTX_DIR = path.join(BRAIN_PATH, 'brain', '01_EDMO', 'screen_context');
 
 const edmo = new Agent({

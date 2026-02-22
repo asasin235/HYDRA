@@ -9,8 +9,8 @@ set -euo pipefail
 : "${SLACK_BOT_TOKEN:=}"
 : "${SLACK_STATUS_CHANNEL:=#hydra-status}"
 
-PI_SMB_PATH="${PI_SMB_PATH:-./brain}"
-BRAIN_DIR="$PI_SMB_PATH/brain"
+BRAIN_PATH="${BRAIN_PATH:-./brain}"
+BRAIN_DIR="$BRAIN_PATH/brain"
 LOGS_DIR="${HYDRA_LOGS_DIR:-./logs}"
 LOG_FILE="$LOGS_DIR/backup.log"
 

@@ -14,7 +14,7 @@ import Agent from '../core/agent.js';
 validateEnv();
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const PROMPTS_DIR = path.join(process.cwd(), 'prompts');
 
 // Auditor uses Gemini Flash for processing multiple agents cheaply
@@ -33,6 +33,7 @@ const AGENT_REGISTRY = {
   '01-edmobot':   { namespace: '01_EDMO',       model: 'anthropic/claude-sonnet-4',    promptFile: '01-edmobot.txt' },
   '02-brandbot':  { namespace: '02_BRAND',      model: 'mistral/mistral-small-latest', promptFile: '02-brandbot.txt' },
   '03-sahibabot': { namespace: '03_SAHIBA',     model: 'mistral/mistral-small-latest', promptFile: '03-sahibabot.txt' },
+  '04-socialbot': { namespace: '04_SOCIAL',     model: 'anthropic/claude-haiku-4-5',   promptFile: '04-socialbot.txt' },
   '05-jarvis':    { namespace: '05_JARVIS',     model: 'google/gemini-flash-3',         promptFile: '05-jarvis.txt' },
   '06-cfobot':    { namespace: '06_CFO',        model: 'deepseek/deepseek-r1',          promptFile: '06-cfobot.txt' },
   '07-biobot':    { namespace: '07_BIOBOT',     model: 'google/gemini-flash-3',         promptFile: '07-biobot.txt' },

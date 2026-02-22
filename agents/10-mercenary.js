@@ -9,7 +9,7 @@ validateEnv();
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#10-mercenary';
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const LEADS_INBOX = path.join(BRAIN_PATH, 'brain', '10_MERCENARY', 'leads_inbox.json');
 const PROPOSALS_DIR = path.join(BRAIN_PATH, 'brain', '10_MERCENARY', 'proposals');
 const INVOICES_DIR = path.join(BRAIN_PATH, 'brain', '10_MERCENARY', 'invoices');

@@ -1,8 +1,8 @@
 import fs from 'fs-extra';
 import path from 'path';
 
-const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
-const USAGE_DIR = path.join(PI_SMB_PATH, 'brain', 'usage');
+const BRAIN_BASE = process.env.BRAIN_PATH || './brain';
+const USAGE_DIR = path.join(BRAIN_BASE, 'brain', 'usage');
 const MONTHLY_USAGE_FILE = path.join(USAGE_DIR, 'monthly_usage.json');
 const PAUSED_AGENTS_FILE = path.join(USAGE_DIR, 'paused_agents.json');
 const CIRCUIT_BREAKERS_FILE = path.join(USAGE_DIR, 'circuit_breakers.json');

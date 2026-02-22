@@ -10,7 +10,7 @@ validateEnv();
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#06-cfobot';
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const CFO_MONTHLY_INCOME = Number(process.env.CFO_MONTHLY_INCOME || 0);
 const CFO_MONTHLY_DEBT_PAYMENT = Number(process.env.CFO_MONTHLY_DEBT_PAYMENT || 0);
 

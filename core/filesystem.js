@@ -1,7 +1,7 @@
-import fs from 'fs-extra';
-import path from 'path';
+import fs from "fs-extra";
+import path from "path";
 
-const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
+const BRAIN_BASE = process.env.BRAIN_PATH || "./brain";
 
 /**
  * Get full path for a brain file, creating directories if needed
@@ -11,11 +11,11 @@ const PI_SMB_PATH = process.env.PI_SMB_PATH || './brain';
  */
 export async function brainPath(namespace, filename) {
   try {
-    const dirPath = path.join(PI_SMB_PATH, 'brain', namespace);
+    const dirPath = path.join(BRAIN_BASE, "brain", namespace);
     await fs.ensureDir(dirPath);
     return path.join(dirPath, filename);
   } catch (error) {
-    await logError('brainPath', { namespace, filename, error: error.message });
+    await logError("brainPath", { namespace, filename, error: error.message });
     throw error;
   }
 }
@@ -33,10 +33,10 @@ export async function readBrain(namespace, filename) {
     if (!exists) {
       return {};
     }
-    const content = await fs.readFile(filePath, 'utf-8');
+    const content = await fs.readFile(filePath, "utf-8");
     return JSON.parse(content);
   } catch (error) {
-    await logError('readBrain', { namespace, filename, error: error.message });
+    await logError("readBrain", { namespace, filename, error: error.message });
     return {};
   }
 }
@@ -51,10 +51,10 @@ export async function writeBrain(namespace, filename, data) {
   try {
     const filePath = await brainPath(namespace, filename);
     const tempPath = `${filePath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
     await fs.rename(tempPath, filePath);
   } catch (error) {
-    await logError('writeBrain', { namespace, filename, error: error.message });
+    await logError("writeBrain", { namespace, filename, error: error.message });
     throw error;
   }
 }
@@ -72,7 +72,11 @@ export async function appendBrain(namespace, filename, entry) {
     arr.push(entry);
     await writeBrain(namespace, filename, arr);
   } catch (error) {
-    await logError('appendBrain', { namespace, filename, error: error.message });
+    await logError("appendBrain", {
+      namespace,
+      filename,
+      error: error.message,
+    });
     throw error;
   }
 }
@@ -84,15 +88,15 @@ export async function appendBrain(namespace, filename, entry) {
  */
 export async function listBrain(namespace) {
   try {
-    const dirPath = path.join(PI_SMB_PATH, 'brain', namespace);
+    const dirPath = path.join(BRAIN_BASE, "brain", namespace);
     const exists = await fs.pathExists(dirPath);
     if (!exists) {
       return [];
     }
     const files = await fs.readdir(dirPath);
-    return files.filter(f => !f.startsWith('.'));
+    return files.filter((f) => !f.startsWith("."));
   } catch (error) {
-    await logError('listBrain', { namespace, error: error.message });
+    await logError("listBrain", { namespace, error: error.message });
     return [];
   }
 }
@@ -104,27 +108,27 @@ export async function listBrain(namespace) {
  */
 async function logError(operation, details) {
   try {
-    const errorsDir = path.join(PI_SMB_PATH, 'brain', 'errors');
+    const errorsDir = path.join(BRAIN_BASE, "brain", "errors");
     await fs.ensureDir(errorsDir);
-    
-    const today = new Date().toISOString().split('T')[0];
+
+    const today = new Date().toISOString().split("T")[0];
     const logFile = path.join(errorsDir, `filesystem_errors_${today}.json`);
-    
+
     let errors = [];
     const exists = await fs.pathExists(logFile);
     if (exists) {
-      const content = await fs.readFile(logFile, 'utf-8');
+      const content = await fs.readFile(logFile, "utf-8");
       errors = JSON.parse(content);
     }
-    
+
     errors.push({
       timestamp: new Date().toISOString(),
       operation,
-      ...details
+      ...details,
     });
-    
-    await fs.writeFile(logFile, JSON.stringify(errors, null, 2), 'utf-8');
+
+    await fs.writeFile(logFile, JSON.stringify(errors, null, 2), "utf-8");
   } catch (e) {
-    console.error('[filesystem] Failed to log error:', e.message);
+    console.error("[filesystem] Failed to log error:", e.message);
   }
 }

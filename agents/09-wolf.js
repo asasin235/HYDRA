@@ -12,7 +12,7 @@ validateEnv();
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#09-wolf';
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || '';
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const TRADES_FILE = path.join(BRAIN_PATH, 'brain', '09_WOLF', 'paper_trades.json');
 const VIRTUAL_START = 100000; // ₹1,00,000 virtual capital
 

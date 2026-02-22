@@ -9,7 +9,7 @@ validateEnv();
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#07-biobot';
-const BRAIN_PATH = process.env.BRAIN_PATH || process.env.PI_SMB_PATH || './brain';
+const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 const HEALTH_DATA_DIR = path.join(BRAIN_PATH, 'brain', '07_BIOBOT', 'health_data');
 const STREAKS_FILE = path.join(BRAIN_PATH, 'brain', '07_BIOBOT', 'streaks.json');
 

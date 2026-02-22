@@ -5,6 +5,7 @@ module.exports = {
     app('01-edmobot'),
     app('02-brandbot'),
     app('03-sahibabot'),
+    app('04-socialbot'),
     app('05-jarvis'),
     app('06-cfobot'),
     app('07-biobot'),
