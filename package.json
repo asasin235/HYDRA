@@ -13,7 +13,9 @@
     "setup": "node scripts/setup.js",
     "stop": "pm2 stop all",
     "logs": "pm2 logs",
-    "status": "pm2 status"
+    "status": "pm2 status",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "keywords": [
     "ai",
@@ -33,6 +35,10 @@
     "node-cron": "^3.0.3",
     "openai": "^4.77.0",
     "pm2": "^5.4.0",
-    "uuid": "^11.0.0"
+    "uuid": "^11.0.0",
+    "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "eslint": "^10.0.1"
   }
 }

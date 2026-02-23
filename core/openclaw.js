@@ -3,6 +3,11 @@
  * Uses the OpenClaw CLI (`openclaw message send`, etc.) to communicate
  * with the running OpenClaw gateway daemon.
  *
+ * Improvements over previous version:
+ *   - Retry logic (2 attempts) for transient CLI failures
+ *   - Gateway availability caching (60s TTL) to avoid spamming `openclaw health`
+ *   - Full CLI args included in error logs for easier debugging
+ *
  * Usage:
  *   import { sendMessage, sendWhatsApp, sendDiscord } from '../core/openclaw.js';
  *   await sendWhatsApp('+919876543210', 'goodnight ❤️');
@@ -10,44 +15,88 @@
  */
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { rootLogger } from './logger.js';
 
 const execFileAsync = promisify(execFile);
 
 const OPENCLAW_BIN = process.env.OPENCLAW_BIN || 'openclaw';
 const OPENCLAW_TIMEOUT = Number(process.env.OPENCLAW_TIMEOUT || 15000);
 
+const log = rootLogger.child({ module: 'openclaw' });
+
+// ── Gateway availability cache ────────────────────────────────────────────────
+// Caches the result of `openclaw health` for 60s to avoid hammering the CLI
+// on every send() call when the gateway is known to be up.
+let _gatewayCache = null;      // { online: boolean, checkedAt: number }
+const GATEWAY_CACHE_TTL = 60 * 1000; // 60 seconds
+
+/** @returns {boolean} True if the cached result is still fresh */
+function isCacheValid() {
+  return _gatewayCache !== null && (Date.now() - _gatewayCache.checkedAt) < GATEWAY_CACHE_TTL;
+}
+
+/** Invalidate the gateway cache (call after any send failure). */
+function invalidateGatewayCache() {
+  _gatewayCache = null;
+}
+
+// ── CLI runner ────────────────────────────────────────────────────────────────
+
 /**
  * Run an OpenClaw CLI command and return parsed JSON output.
- * @param {string[]} args - CLI arguments
+ * Retries once on transient failures (timeout, non-zero exit from a server error).
+ *
+ * @param {string[]} args - CLI arguments (--json is appended automatically)
  * @param {number} [timeout] - Override timeout in ms
+ * @param {number} [maxAttempts=2] - Max retry attempts
  * @returns {Promise<{ok: boolean, data?: any, error?: string}>}
  */
-async function runCli(args, timeout = OPENCLAW_TIMEOUT) {
-  try {
-    const { stdout, stderr } = await execFileAsync(OPENCLAW_BIN, [...args, '--json'], {
-      timeout,
-      maxBuffer: 1024 * 1024, // 1MB
-      env: { ...process.env }
-    });
+async function runCli(args, timeout = OPENCLAW_TIMEOUT, maxAttempts = 2) {
+  const fullArgs = [...args, '--json'];
+  let lastError = null;
 
-    // Try to parse JSON from stdout
-    const trimmed = stdout.trim();
-    if (!trimmed) return { ok: true, data: {} };
-
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const data = JSON.parse(trimmed);
-      return { ok: true, data };
-    } catch {
-      // CLI returned non-JSON output — treat as raw text
-      return { ok: true, data: { raw: trimmed } };
+      const { stdout, stderr } = await execFileAsync(OPENCLAW_BIN, fullArgs, {
+        timeout,
+        maxBuffer: 1024 * 1024, // 1MB
+        env: { ...process.env }
+      });
+
+      const trimmed = stdout.trim();
+      if (!trimmed) return { ok: true, data: {} };
+
+      try {
+        const data = JSON.parse(trimmed);
+        return { ok: true, data };
+      } catch {
+        // CLI returned non-JSON — treat as raw text
+        return { ok: true, data: { raw: trimmed } };
+      }
+    } catch (e) {
+      lastError = e;
+      const isTransient = e.killed || e.code === 'ETIMEDOUT' || (e.stderr || '').includes('5');
+      if (attempt < maxAttempts && isTransient) {
+        log.warn(`OpenClaw CLI transient failure, retrying (attempt ${attempt}/${maxAttempts})`, {
+          cmd: `${OPENCLAW_BIN} ${args.slice(0, 3).join(' ')}`,
+          error: e.message
+        });
+        await new Promise(r => setTimeout(r, 500 * attempt)); // 500ms, 1s
+        continue;
+      }
+      break;
     }
-  } catch (e) {
-    // execFile error: timeout, exit code !== 0, or binary not found
-    const errMsg = e.stderr?.trim() || e.message;
-    console.error(`[openclaw] CLI error (${args.slice(0, 3).join(' ')}):`, errMsg);
-    return { ok: false, error: errMsg };
   }
+
+  const errMsg = lastError?.stderr?.trim() || lastError?.message || 'unknown error';
+  log.error(`OpenClaw CLI error`, {
+    cmd: `${OPENCLAW_BIN} ${args.join(' ')}`,
+    error: errMsg
+  });
+  return { ok: false, error: errMsg };
 }
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
  * Send a message through OpenClaw Gateway.
@@ -61,12 +110,14 @@ export async function sendMessage(channel, to, message, options = {}) {
   const args = ['message', 'send', '--channel', channel, '--target', to, '--message', message];
 
   if (options.replyTo) args.push('--reply-to', options.replyTo);
-  if (options.media) args.push('--media', options.media);
-  if (options.silent) args.push('--silent');
-  if (options.dryRun) args.push('--dry-run');
+  if (options.media)   args.push('--media', options.media);
+  if (options.silent)  args.push('--silent');
+  if (options.dryRun)  args.push('--dry-run');
 
   const result = await runCli(args);
   if (!result.ok) {
+    // Invalidate gateway cache on send failure — it may be down
+    invalidateGatewayCache();
     return { success: false, error: result.error };
   }
   return {
@@ -75,40 +126,41 @@ export async function sendMessage(channel, to, message, options = {}) {
   };
 }
 
-/**
- * Send a WhatsApp message.
- */
+/** Send a WhatsApp message. */
 export async function sendWhatsApp(to, message, options = {}) {
   return sendMessage('whatsapp', to, message, options);
 }
 
-/**
- * Send an iMessage.
- */
+/** Send an iMessage. */
 export async function sendIMessage(to, message, options = {}) {
   return sendMessage('imessage', to, message, options);
 }
 
-/**
- * Send a Discord message.
- */
+/** Send a Discord message. */
 export async function sendDiscord(to, message, options = {}) {
   return sendMessage('discord', to, message, options);
 }
 
-/**
- * Send a Telegram message.
- */
+/** Send a Telegram message. */
 export async function sendTelegram(to, message, options = {}) {
   return sendMessage('telegram', to, message, options);
 }
 
 /**
  * Check if OpenClaw Gateway is reachable and healthy.
+ * Result is cached for 60s to avoid repeated CLI calls.
+ * @param {boolean} [forceRefresh=false] - Bypass cache
  * @returns {Promise<{online: boolean, channels?: object, version?: string, error?: string}>}
  */
-export async function getGatewayStatus() {
-  const result = await runCli(['health'], 5000);
+export async function getGatewayStatus(forceRefresh = false) {
+  if (!forceRefresh && isCacheValid()) {
+    return { online: _gatewayCache.online, cached: true };
+  }
+
+  const result = await runCli(['health'], 5000, 1); // no retry on health checks
+  const online = result.ok && !!result.data;
+  _gatewayCache = { online, checkedAt: Date.now() };
+
   if (!result.ok) {
     return { online: false, error: result.error };
   }
@@ -124,7 +176,7 @@ export async function getGatewayStatus() {
  * @returns {Promise<{online: boolean, channels?: object[], error?: string}>}
  */
 export async function getChannelStatus() {
-  const result = await runCli(['channels', 'status'], 5000);
+  const result = await runCli(['channels', 'status'], 5000, 1);
   if (!result.ok) {
     return { online: false, error: result.error };
   }
@@ -132,6 +184,17 @@ export async function getChannelStatus() {
     online: true,
     channels: result.data?.channels || result.data
   };
+}
+
+/**
+ * Check if the gateway binary is installed and accessible.
+ * Uses cached result from getGatewayStatus if available.
+ * @returns {Promise<boolean>}
+ */
+export async function isGatewayAvailable() {
+  if (isCacheValid()) return _gatewayCache.online;
+  const status = await getGatewayStatus();
+  return status.online;
 }
 
 /**
@@ -150,7 +213,7 @@ export async function getMessages(channel, contact, limit = 10) {
   ]);
 
   if (!result.ok) {
-    console.error(`[openclaw] getMessages failed:`, result.error);
+    log.error('getMessages failed', { channel, contact, error: result.error });
     return [];
   }
   return result.data?.messages || (Array.isArray(result.data) ? result.data : []);

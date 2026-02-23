@@ -2,7 +2,7 @@
 
 > **H**yper **Y**ielding **D**ecision & **R**esource **A**gent
 
-A multi-agent AI system that manages your entire life — from work productivity and finances to health, relationships, home automation, investments, and freelance income. Built on Node.js, powered by multiple LLMs via OpenRouter, orchestrated through Slack, running on a Mac Mini with an external SSD for heavy data.
+A multi-agent AI system that manages Aatif Rashid's entire life — from work productivity and finances to health, relationships, home automation, investments, and freelance income. Built on Node.js, powered by multiple LLMs via OpenRouter, orchestrated through Slack, running on a Mac Mini with an external SSD for heavy data.
 
 ---
 
@@ -28,10 +28,10 @@ A multi-agent AI system that manages your entire life — from work productivity
 │  (OpenRouter │   │  (SQLite)    │     │  Markdown → OpenClaw │
 │   LLM calls) │   │              │     │  memory_search       │
 │  Tool calls  │   │ agent_state  │     │                      │
-│  Budget check│   │ debt_tracker │     │  shared_context/     │
-│  Heartbeat   │   │ daily_logs   │     │  ├─ screen/    ←─────│── MacBook Pro
-│              │   │ paper_trades │     │  ├─ audio/     ←─────│── Plaud Note
-│              │   │ leads        │     │  └─ notes/           │
+│  Retry+Bkoff │   │ debt_tracker │     │  shared_context/     │
+│  Budget check│   │ daily_logs   │     │  ├─ screen/    ←─────│── MacBook Pro
+│  Heartbeat   │   │ paper_trades │     │  ├─ audio/     ←─────│── Plaud Note
+│  Winston log │   │ leads        │     │  └─ notes/           │
 └──────┬───────┘   └──────┬───────┘     └──────┬───────────────┘
        │                  │                    │ auto-indexed by
        └──────────────────┼────────────────────┘ OpenClaw Gateway
@@ -56,41 +56,59 @@ A multi-agent AI system that manages your entire life — from work productivity
 
 ## 🤖 Agent Registry
 
-| #      | Agent           | Model                     | Purpose                                                                             | Schedule                                     |
-| ------ | --------------- | ------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- |
-| **00** | `architect`     | Gemini Flash 3            | Meta-strategist: morning/evening briefs, agent watchdog, goal tracking              | 6AM / 10PM daily, watchdog every 30m         |
-| **01** | `edmobot`       | Claude Sonnet 4           | Work productivity: Screenpipe context, Jira tickets, work briefs                    | 9AM daily, Friday 5PM weekly perf            |
-| **02** | `brandbot`      | Mistral Small             | Personal brand: GitHub activity → LinkedIn drafts, lead qualification               | Monday 10AM                                  |
-| **03** | `sahibabot`     | Mistral Small + Haiku 4.5 | Relationship health: nudges, promise tracking, WhatsApp drafts                      | 4PM daily nudge, Monday events, 8PM promises |
-| **04** | `socialbot`     | Claude Haiku 4.5          | Social proxy: drafts WhatsApp/iMessage/Discord replies via Screenpipe + AppleScript | Every 2min scan, 9PM daily summary           |
-| **05** | `jarvis`        | Gemini Flash 3            | Home automation via Home Assistant: AC, lights, sleep mode, sensors                 | Every 30m automation check                   |
-| **06** | `cfobot`        | DeepSeek R1               | Personal CFO: SMS spending analysis, debt payoff, wedding fund                      | 11PM nightly, 1st of month projection        |
-| **07** | `biobot`        | Gemini Flash 3            | Health tracker: Apple Health sync, HRV readiness, streak tracking                   | 6AM / 10PM briefs, 3PM walk nudge            |
-| **08** | _CareerBot_     | —                         | 🔒 Reserved for Phase 2 (career strategy & skill gaps)                              | —                                            |
-| **09** | `wolf`          | DeepSeek R1               | Paper trading: Nifty stock analysis via Perplexity, ₹1L virtual capital             | Weekdays 9:30AM & 3:30PM, Sunday review      |
-| **10** | `mercenary`     | Claude Sonnet 4           | Freelance pipeline: lead evaluation, proposal generation, invoicing                 | 8PM daily lead scan                          |
-| **11** | `auditor`       | Gemini Flash 3            | Weekly reflection: scores all agents, proposes prompt changes, auto-rollback        | Sunday 10PM                                  |
-| **99** | `slack-gateway` | —                         | Slack Bolt app: message routing, action handlers, `/hydra-status`                   | Always-on (Socket Mode)                      |
+| #      | Agent           | Model            | Purpose                                                                          | Schedule                                     |
+| ------ | --------------- | ---------------- | -------------------------------------------------------------------------------- | -------------------------------------------- |
+| **00** | `architect`     | Gemini Flash 3   | Chief of Staff: morning/evening briefs, agent watchdog, goal tracking            | 6AM / 10PM daily, watchdog every 30m         |
+| **01** | `edmobot`       | Claude Sonnet 4  | Work productivity: Screenpipe context, Jira tickets, work briefs                 | 9AM daily, Friday 5PM weekly perf            |
+| **02** | `brandbot`      | DeepSeek V3      | Personal brand: GitHub activity → LinkedIn drafts, lead qualification            | Monday 10AM                                  |
+| **03** | `sahibabot`     | Claude Haiku 4.5 | Relationship health: nudges, promise tracking, date suggestions, WhatsApp drafts | 4PM daily nudge, Monday events, 8PM promises |
+| **04** | `socialbot`     | Claude Haiku 4.5 | Social proxy: drafts WhatsApp/iMessage/Discord replies via OpenClaw + Screenpipe | Every 2min scan, 9PM daily summary           |
+| **05** | `jarvis`        | Claude Haiku 4.5 | Home automation via Home Assistant: AC, lights, geyser, sleep mode, sensors      | Every 30m automation check                   |
+| **06** | `cfobot`        | DeepSeek R1      | Personal CFO: SMS spending analysis, debt payoff, wedding fund                   | 11PM nightly, 1st of month projection        |
+| **07** | `biobot`        | Claude Haiku 4.5 | Health tracker: Apple Health sync, HRV readiness, quit tracker, streak tracking  | 6AM / 10PM briefs, 3PM walk nudge            |
+| **08** | _CareerBot_     | —                | 🔒 Reserved for Phase 2 (career strategy & skill gaps)                           | —                                            |
+| **09** | `wolf`          | DeepSeek R1      | Paper trading: Nifty F&O analysis via Perplexity, ₹1L virtual capital            | Weekdays 9:30AM & 3:30PM, Sunday review      |
+| **10** | `mercenary`     | Claude Sonnet 4  | Freelance pipeline: lead evaluation, proposal generation, invoicing              | 8PM daily lead scan                          |
+| **11** | `auditor`       | Gemini Flash 3   | Weekly reflection: scores all agents, proposes prompt changes, auto-rollback     | Sunday 10PM                                  |
+| **99** | `slack-gateway` | —                | Slack Bolt app: message routing, action handlers, `/hydra-status`                | Always-on (Socket Mode)                      |
+
+> **Agent config is centralised in `core/registry.js`** — a single source of truth for names, models, namespaces, prompt files, and budget tiers.
 
 ---
 
 ## 🧠 Core Modules
 
+### `core/registry.js` ✨ NEW
+
+- **Single source of truth** for all agent configuration (name, model, namespace, promptFile, budget tier, Slack channel)
+- Exports: `AGENTS`, `AGENT_NAMES`, `ACTIVE_AGENT_NAMES`, `TIER1`, `TIER2`, `TIER3`, `AGENT_NAMESPACES`
+- Previously duplicated across `00-architect.js`, `11-auditor.js`, and `bottleneck.js` — now all import from here
+
 ### `core/agent.js` — Base Agent Class
 
 - Wraps OpenRouter chat completions API with tool-calling support
+- **Retry with exponential backoff**: 3 attempts (1s → 2s → 4s) on 429/502/503/timeout errors
 - **Budget enforcement**: estimates token usage, checks against per-agent budget via `bottleneck.js`
-- **Health endpoint**: shared Express server on port `3002` with `/health` and `/health/:agent`
+- **Graceful shutdown**: SIGTERM/SIGINT handlers clear heartbeat intervals and close health server cleanly
+- **Health endpoint**: shared Express server on port `3002` with `/health` and `/health/:agent` — returns **real circuit-breaker and paused state** (not hardcoded "healthy")
 - **Heartbeat**: writes `heartbeat.json` every 5 minutes to brain storage
 - **Interaction logging**: appends daily logs as JSON to the agent's brain namespace
+- **Winston logging**: structured logs with JSON mode in PM2, pretty-print in dev
+
+### `core/logger.js` ✨ NEW
+
+- Winston-based structured logger factory: `createLogger('agent-name')`
+- Auto-detects PM2 environment — JSON output in production, colour-coded pretty-print in dev
+- Log levels: `debug`, `info`, `warn`, `error`
+- All agents get their own named logger instance via `this.log`
 
 ### `core/bottleneck.js` — Budget & Circuit Breaker
 
 - **$50/month** hard budget cap across all agents
-- **Priority tiers** for graceful degradation:
+- **Priority tiers** sourced from `core/registry.js`:
   - **Tier 1** (Architect, CFO, Edmo) — runs up to 100% budget
-  - **Tier 2** (Sahiba, Bio, Jarvis) — paused at 80% utilization
-  - **Tier 3** (Brand, Wolf, Auditor) — paused at 60% utilization
+  - **Tier 2** (Sahiba, Bio, Jarvis, Social) — paused at 80% utilization
+  - **Tier 3** (Brand, Wolf, Auditor, Mercenary) — paused at 60% utilization
 - **Circuit breaker**: 3 failures within 5 minutes → agent disabled, Slack alert sent
 - Tracks per-agent daily and monthly token/cost usage in JSON files
 
@@ -100,7 +118,7 @@ A multi-agent AI system that manages your entire life — from work productivity
 - WAL mode with 5s busy timeout
 - Stored on Mac Mini internal storage (`~/hydra-brain/brain/hydra.db`)
 
-### `core/memory.js` — Vector Memory (LanceDB)
+### `core/memory.js` — Vector Memory (LanceDB, legacy)
 
 - Embedding model: `text-embedding-3-small` (1536 dimensions) via OpenRouter
 - Tables: `memories`, `daily_logs`, `reflections`
@@ -110,24 +128,26 @@ A multi-agent AI system that manages your entire life — from work productivity
 ### `core/openclaw.js` — Messaging Gateway Client
 
 - Uses the **OpenClaw CLI** (`openclaw message send`, etc.) via `child_process.execFile`
+- **Retry logic**: 2 attempts with 500ms/1s backoff for transient CLI failures
+- **Gateway caching**: `isGatewayAvailable()` caches `openclaw health` result for 60s
+- Cache is invalidated on send failures so a downed gateway is detected quickly
 - Exports: `sendMessage()`, `sendWhatsApp()`, `sendIMessage()`, `sendDiscord()`, `sendTelegram()`
-- Also: `getGatewayStatus()`, `getChannelStatus()`, `getMessages()` for health checks and reading threads
-- Supports `dryRun`, `media`, `replyTo`, and `silent` options
-- Used by: SocialBot (draft replies), SahibaBot (WhatsApp sends), and available to all other agents
+- Also: `getGatewayStatus()`, `getChannelStatus()`, `getMessages()`, `isGatewayAvailable()`
 
 ### `core/openclaw-memory.js` — Shared Brain (OpenClaw Memory)
 
 - Writes context as Markdown files to `~/hydra-brain/shared_context/` (auto-indexed by OpenClaw)
 - Three data streams: `screen/` (Screenpipe), `audio/` (Plaud Note), `notes/` (agent observations)
 - Exports: `writeScreenActivity()`, `writeAudioTranscript()`, `writeContext()`, `searchContext()`
-- Also: `readTodayScreenActivity()`, `readRecentContext()` for direct file reads
-- `searchContext()` wraps `openclaw memory search` CLI for semantic queries across all data
+- Also: `readTodayScreenActivity()`, `readRecentContext()`
 
-### `core/memory.js` — Vector Memory (LanceDB, legacy)
+### `core/validate-env.js` — Per-Agent Startup Validation
 
-- LanceDB tables: `memories`, `daily_logs`, `reflections`
-- Embeddings via OpenRouter (text-embedding-3-small)
-- Used by: agent reflections and daily log storage
+- **Per-agent validation**: each agent only checks the env vars it actually needs
+  - `validateEnv('05-jarvis')` → checks `OPENROUTER_API_KEY` + `BRAIN_PATH` + HA vars only
+  - `validateEnv()` → checks core vars only
+- Allows running a single agent without needing all unrelated keys (e.g. B2, GitHub)
+- Fails fast with clear messages listing every missing variable and which agent needs it
 
 ### `core/filesystem.js` — Brain File I/O
 
@@ -140,11 +160,6 @@ A multi-agent AI system that manages your entire life — from work productivity
 
 - Bearer token authentication for inter-service API calls
 - Express middleware (`validateRequest`) and authenticated fetch (`signedFetch`)
-
-### `core/validate-env.js` — Startup Validation
-
-- Checks all required environment variables before any agent starts
-- Fails fast with clear error messages
 
 ---
 
@@ -175,31 +190,43 @@ Bulk/heavy data that doesn't need SSD-speed access:
 ```
 HYDRA/
 ├── agents/                    # Individual agent processes
-│   ├── 00-architect.js        # Meta-strategist & watchdog
-│   ├── 01-edmobot.js          # Work productivity
-│   ├── 02-brandbot.js         # Personal branding
+│   ├── 00-architect.js        # Chief of Staff & watchdog
+│   ├── 01-edmobot.js          # Work productivity (Edmo)
+│   ├── 02-brandbot.js         # Personal branding & lead gen
 │   ├── 03-sahibabot.js        # Relationship health
 │   ├── 04-socialbot.js        # Social proxy (WhatsApp/iMessage/Discord)
 │   ├── 05-jarvis.js           # Home automation
 │   ├── 06-cfobot.js           # Personal finance
-│   ├── 07-biobot.js           # Health & fitness
+│   ├── 07-biobot.js           # Health & fitness + quit tracking
 │   ├── 08-RESERVED.md         # CareerBot (Phase 2)
-│   ├── 09-wolf.js             # Paper trading
+│   ├── 09-wolf.js             # Paper trading (Nifty F&O)
 │   ├── 10-mercenary.js        # Freelance pipeline
 │   ├── 11-auditor.js          # Weekly reflection engine
 │   └── 99-slack-gateway.js    # Slack Bolt gateway
 ├── core/                      # Shared infrastructure
-│   ├── agent.js               # Base Agent class
+│   ├── agent.js               # Base Agent class (retry, shutdown, health, Winston)
 │   ├── auth.js                # API key auth
-│   ├── bottleneck.js          # Budget & circuit breaker
+│   ├── bottleneck.js          # Budget & circuit breaker (tiers from registry)
 │   ├── db.js                  # SQLite database
 │   ├── filesystem.js          # Brain file I/O
+│   ├── logger.js              # ✨ Winston structured logger factory
 │   ├── memory.js              # LanceDB vector memory (legacy)
-│   ├── openclaw.js            # OpenClaw Gateway client (messaging)
+│   ├── openclaw.js            # OpenClaw Gateway client (retry + gateway cache)
 │   ├── openclaw-memory.js     # Shared brain (OpenClaw memory bridge)
-│   └── validate-env.js        # Env var validation
+│   ├── registry.js            # ✨ Centralized agent config registry
+│   └── validate-env.js        # Per-agent env var validation
 ├── prompts/                   # System prompts (hot-reloadable)
-│   └── 00-architect.txt       # Example prompt
+│   ├── 00-architect.txt       # Chief of Staff persona
+│   ├── 01-edmobot.txt         # Senior Backend Engineer persona
+│   ├── 02-brandbot.txt        # Publicist & lead gen persona
+│   ├── 03-sahibabot.txt       # Relationship guardian persona
+│   ├── 04-socialbot.txt       # Social proxy persona (Delhi dev tone)
+│   ├── 05-jarvis.txt          # Home automation persona
+│   ├── 06-cfobot.txt          # Strict financial controller persona
+│   ├── 07-biobot.txt          # Health & wellness coach persona
+│   ├── 09-wolf.txt            # Conservative F&O risk analyst persona
+│   ├── 10-mercenary.txt       # Ruthless freelance contractor persona
+│   └── 11-auditor.txt        # Weekly reflection orchestrator persona
 ├── scripts/                   # Utilities & syncs
 │   ├── backup.sh              # Encrypted B2 backup via rclone
 │   ├── restore.sh             # Restore from B2 backup
@@ -212,6 +239,10 @@ HYDRA/
 │   ├── package.json
 │   ├── .env.example
 │   └── README.md
+├── docs/                      # Extended documentation
+│   └── openclaw-guide.md      # OpenClaw setup & usage (full guide)
+├── .eslintrc.cjs              # ✨ ESLint config for Node.js ESM
+├── jsconfig.json              # ✨ Editor type checking (checkJs)
 ├── ecosystem.config.cjs       # PM2 process manager config
 ├── package.json
 ├── sample.env                 # Full env var reference
@@ -252,22 +283,24 @@ mkdir -p ~/hydra-brain/brain
 
 ### Configuration
 
-Copy `sample.env` to `.env` and fill in all required values:
+Copy `sample.env` to `.env` and fill in all required values.
 
-| Variable               | Required | Description                                                |
-| ---------------------- | -------- | ---------------------------------------------------------- |
-| `OPENROUTER_API_KEY`   | ✅       | OpenRouter API key for all LLM calls                       |
-| `SLACK_BOT_TOKEN`      | ✅       | Slack Bot User OAuth Token (`xoxb-...`)                    |
-| `SLACK_SIGNING_SECRET` | ✅       | Slack app signing secret                                   |
-| `SLACK_APP_TOKEN`      | ✅       | Slack App-Level Token for Socket Mode (`xapp-...`)         |
-| `BRAIN_PATH`           | ✅       | Path to brain directory on Mac Mini (e.g. `~/hydra-brain`) |
-| `EXTERNAL_SSD_PATH`    | 🔶       | Path to external SSD (e.g. `/Volumes/HydraSSD`)            |
-| `HOME_ASSISTANT_URL`   | ✅       | Home Assistant instance URL                                |
-| `HOME_ASSISTANT_TOKEN` | ✅       | Home Assistant long-lived access token                     |
-| `INTERNAL_API_KEY`     | ✅       | Shared key for inter-service communication                 |
-| `B2_ACCOUNT_ID`        | ✅       | Backblaze B2 account ID                                    |
-| `B2_APP_KEY`           | ✅       | Backblaze B2 application key                               |
-| `B2_BUCKET`            | ✅       | B2 bucket name (default: `hydra-backup`)                   |
+> **Note:** Each agent now only validates the env vars it needs. You can run a single agent (e.g. `05-jarvis`) without setting up B2 backup keys, GitHub tokens, or Perplexity.
+
+| Variable               | Required  | Description                                                |
+| ---------------------- | --------- | ---------------------------------------------------------- |
+| `OPENROUTER_API_KEY`   | ✅        | OpenRouter API key for all LLM calls                       |
+| `SLACK_BOT_TOKEN`      | ✅        | Slack Bot User OAuth Token (`xoxb-...`)                    |
+| `SLACK_SIGNING_SECRET` | ✅        | Slack app signing secret                                   |
+| `SLACK_APP_TOKEN`      | ✅        | Slack App-Level Token for Socket Mode (`xapp-...`)         |
+| `BRAIN_PATH`           | ✅        | Path to brain directory on Mac Mini (e.g. `~/hydra-brain`) |
+| `EXTERNAL_SSD_PATH`    | 🔶        | Path to external SSD (e.g. `/Volumes/HydraSSD`)            |
+| `HOME_ASSISTANT_URL`   | ✅ jarvis | Home Assistant instance URL                                |
+| `HOME_ASSISTANT_TOKEN` | ✅ jarvis | Home Assistant long-lived access token                     |
+| `INTERNAL_API_KEY`     | ✅        | Shared key for inter-service communication                 |
+| `B2_ACCOUNT_ID`        | 🔶        | Backblaze B2 account ID (backup only)                      |
+| `B2_APP_KEY`           | 🔶        | Backblaze B2 application key (backup only)                 |
+| `B2_BUCKET`            | 🔶        | B2 bucket name (default: `hydra-backup`)                   |
 
 See `sample.env` for the full list including optional variables for each agent.
 
@@ -293,6 +326,17 @@ npm run status    # pm2 status
 npm run stop      # pm2 stop all
 ```
 
+### Developer Setup
+
+```bash
+# Lint (ESLint with Node.js ESM config)
+npm run lint
+npm run lint:fix
+
+# Editor type checking: open in VS Code or Cursor
+# jsconfig.json enables checkJs for all core/ agents/ scripts/
+```
+
 ---
 
 ## 💬 Slack Interface
@@ -316,7 +360,7 @@ npm run stop      # pm2 stop all
 ### Interactive Actions
 
 - **Reflection approve/skip buttons** — approve or skip prompt changes proposed by the auditor
-- **SabihaBot message drafts** — send, edit, or discard drafted WhatsApp messages
+- **SahibaBot message drafts** — send, edit, or discard drafted WhatsApp messages
 - **SocialBot draft reviews** — Send Now / Edit / Discard for auto-drafted chat replies
 - **Approve/reject actions** — general-purpose agent action approvals
 
@@ -338,9 +382,13 @@ Every Sunday at 10PM, `11-auditor` orchestrates a reflection cycle:
 ## 💰 Budget Management
 
 - **Monthly cap**: $50 across all agents
-- **Model cost rates** tracked per-token (Gemini Flash, Claude Sonnet, DeepSeek R1, Mistral Small)
-- **Tiered degradation**: lower-priority agents are paused first as budget is consumed
+- **Model cost rates** tracked per-token
+- **Tiered degradation** (from `core/registry.js`):
+  - Tier 1 (Architect, CFO, Edmo) — always runs
+  - Tier 2 (Sahiba, Bio, Jarvis, Social) — paused at 80%
+  - Tier 3 (Brand, Wolf, Auditor, Mercenary) — paused at 60%
 - **Circuit breaker**: 3 consecutive failures within 5 minutes → agent disabled + Slack `@here` alert
+- **Retry**: LLM calls retry up to 3× with exponential backoff before tripping the circuit breaker
 - **Monitoring**: `/hydra-status` shows real-time per-agent spend
 
 ---
@@ -354,13 +402,13 @@ GET http://localhost:3002/health          # All agents summary
 GET http://localhost:3002/health/:agent   # Individual agent status
 ```
 
-Returns:
+Returns **real** agent state (not hardcoded "healthy"):
 
 ```json
 {
   "agent": "05-jarvis",
-  "status": "healthy",
-  "lastRun": "2026-02-22T15:30:00.000Z",
+  "status": "healthy", // "healthy" | "paused" | "circuit-open"
+  "lastRun": "2026-02-24T00:30:00.000Z",
   "tokensTodayUsed": 1234,
   "tokensTodayBudget": 100000,
   "circuitBreaker": "closed",
@@ -384,13 +432,11 @@ The Architect agent checks heartbeats every 30 minutes. If any online agent hasn
 ```
 
 - Uses `rclone crypt` for at-rest encryption
-- Excludes `audio_inbox/` to save bandwidth
 - Posts completion summary to `#hydra-status`
 
 ### Restore
 
 ```bash
-# Restore from encrypted B2 backup
 ./scripts/restore.sh
 ```
 
@@ -404,80 +450,17 @@ The Architect agent checks heartbeats every 30 minutes. If any online agent hasn
 
 ---
 
-## 📱 Companion Scripts
-
-These scripts sync data from local sources into the brain:
-
-### `scripts/health-sync.js`
-
-- Runs at 5:45AM daily
-- Parses Apple Health Auto Export CSV files from Downloads/iCloud
-- Extracts: HRV, sleep hours, steps, resting HR, active energy
-- Writes consolidated JSON to `brain/07_BIOBOT/health_data/`
-
-### `scripts/screenpipe-sync.js`
-
-- Runs every 5 minutes
-- Reads Screenpipe SQLite database for OCR captures
-- Filters for relevant apps (Cursor, Slack, Jira, Chrome, Terminal, etc.)
-- Writes JSON to `brain/01_EDMO/screen_context/`
-
----
-
 ## 🔗 OpenClaw Integration
 
-HYDRA uses [OpenClaw](https://docs.openclaw.ai) as the messaging I/O layer. OpenClaw provides a self-hosted gateway for WhatsApp, iMessage, Discord, Telegram, Signal, and more — any HYDRA agent can send messages via the shared `core/openclaw.js` client.
+HYDRA uses [OpenClaw](https://docs.openclaw.ai) as the messaging I/O layer. OpenClaw provides a self-hosted gateway for WhatsApp, iMessage, Discord, Telegram, and more.
 
-### Prerequisites
+See **[docs/openclaw-guide.md](docs/openclaw-guide.md)** for the full setup guide.
 
-- **OpenClaw CLI** installed globally: `npm install -g openclaw@latest`
-- OpenClaw gateway running on the same Mac Mini as HYDRA
+Key notes:
 
-### Setup
-
-```bash
-# Install OpenClaw
-npm install -g openclaw@latest
-
-# Run the interactive onboarding wizard
-openclaw onboard
-
-# Link your WhatsApp account (scan QR code)
-openclaw channels login --channel whatsapp
-
-# Start the gateway (installs as a launchd service)
-openclaw gateway install
-openclaw gateway start
-
-# Verify everything is healthy
-openclaw health
-openclaw channels status
-```
-
-### Configure Incoming Messages
-
-To forward incoming WhatsApp/iMessage messages to HYDRA's SocialBot, add a webhook hook to your OpenClaw config (`~/.openclaw/openclaw.json`):
-
-```bash
-openclaw config set hooks.onMessage "http://127.0.0.1:3004/social/incoming"
-```
-
-### How It Works
-
-1. **Incoming:** OpenClaw receives WhatsApp/iMessage/Discord messages → forwards to SocialBot webhook (`http://127.0.0.1:3004/social/incoming`) via the `hooks.onMessage` config
-2. **Drafting:** SocialBot drafts a reply using Claude Haiku + personality prompt → posts to Slack `#04-socialbot`
-3. **Approval:** You tap **Send Now** in Slack → HYDRA calls `openclaw message send` via CLI → message sent natively
-4. **Any agent** can send messages: `import { sendWhatsApp } from '../core/openclaw.js'`
-
-### Useful Commands
-
-```bash
-openclaw health                    # Gateway health check
-openclaw channels status           # Channel connection status
-openclaw message send --channel whatsapp --target +91... --message "Hi" --dry-run  # Test send
-openclaw message read --channel whatsapp --target +91... --limit 5   # Read recent messages
-openclaw doctor                    # Diagnose issues
-```
+- Outgoing: any agent can call `sendWhatsApp()`, `sendIMessage()`, etc. from `core/openclaw.js`
+- Incoming: OpenClaw forwards messages to SocialBot's webhook at `http://127.0.0.1:3004/social/incoming`
+- CLI calls include **retry logic** (2 attempts) and a **60-second gateway availability cache**
 
 ---
 
@@ -489,6 +472,7 @@ openclaw doctor                    # Diagnose issues
 - [ ] **Voice Interface** — Audio commands via Whisper transcription
 - [ ] **Real NSE API** — Live market data for Wolf paper trading
 - [ ] **SMS Automation** — Auto-scrape transaction SMS for CFOBot
+- [ ] **Test Suite** — Vitest unit tests for core modules
 
 ---
 
@@ -508,6 +492,8 @@ openclaw doctor                    # Diagnose issues
 | Market Research | Perplexity API (Sonar)                                                              |
 | Messaging       | OpenClaw Gateway (WhatsApp, iMessage, Discord, Telegram)                            |
 | Backup          | rclone + Backblaze B2 (encrypted)                                                   |
+| Logging         | Winston (JSON in PM2, pretty-print in dev)                                          |
+| Linting         | ESLint (Node.js ESM flat config)                                                    |
 | Brain Storage   | Mac Mini internal SSD                                                               |
 | Heavy Data      | External SSD                                                                        |
 

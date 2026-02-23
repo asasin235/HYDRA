@@ -1,5 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { TIER1, TIER2, TIER3 } from './registry.js';
 
 const BRAIN_BASE = process.env.BRAIN_PATH || './brain';
 const USAGE_DIR = path.join(BRAIN_BASE, 'brain', 'usage');
@@ -25,10 +26,7 @@ const MODEL_RATES = {
 // Monthly budget cap in dollars
 const MONTHLY_BUDGET = 50;
 
-// Priority tiers
-const TIER1 = ['00-architect','06-cfobot','01-edmobot'];
-const TIER2 = ['03-sahibabot','07-biobot','05-jarvis'];
-const TIER3 = ['02-brandbot','09-wolf','11-auditor'];
+// Priority tiers (imported from core/registry.js — single source of truth)
 
 // In-memory circuit breaker state
 const failures = new Map(); // agent -> number & timestamps

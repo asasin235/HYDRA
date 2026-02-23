@@ -3,7 +3,7 @@ import axios from 'axios';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 
-validateEnv();
+validateEnv('05-jarvis');
 
 const HA_URL = process.env.HOME_ASSISTANT_URL || 'http://192.168.68.124:8123';
 const HA_TOKEN = process.env.HOME_ASSISTANT_TOKEN || '';

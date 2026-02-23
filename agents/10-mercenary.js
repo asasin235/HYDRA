@@ -5,7 +5,7 @@ import path from 'path';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 
-validateEnv();
+validateEnv('10-mercenary');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#10-mercenary';
