@@ -171,6 +171,11 @@ export async function readTodayAudioTranscripts() {
  * @returns {Promise<string>} Combined Markdown content
  */
 export async function readRecentContext(subdir, days = 3) {
+    const ALLOWED_SUBDIRS = ['screen', 'audio', 'notes'];
+    if (!ALLOWED_SUBDIRS.includes(subdir)) {
+        console.error(`[openclaw-memory] Invalid subdir: ${subdir}`);
+        return '';
+    }
     const dir = path.join(SHARED_CTX_DIR, subdir);
     try {
         const files = (await fs.readdir(dir))

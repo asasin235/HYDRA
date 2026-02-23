@@ -17,7 +17,10 @@ export function validateRequest(req, res, next) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     const key = header.slice(7).trim();
-    if (key !== expected) {
+    // Use timing-safe comparison to prevent timing attacks
+    const keyBuf = Buffer.from(key);
+    const expectedBuf = Buffer.from(expected);
+    if (keyBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(keyBuf, expectedBuf)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     return next();
