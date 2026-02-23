@@ -4,6 +4,22 @@ import path from "path";
 const BRAIN_BASE = process.env.BRAIN_PATH || "./brain";
 
 /**
+ * Validate that a path component does not escape the intended directory.
+ * Rejects path traversal sequences and absolute paths.
+ * @param {string} component - Path component to validate (namespace or filename)
+ * @param {string} label - Human-readable label for error messages
+ */
+function validatePathComponent(component, label) {
+  if (typeof component !== "string" || component.length === 0) {
+    throw new Error(`Invalid ${label}: must be a non-empty string`);
+  }
+  // Reject absolute paths and directory traversal
+  if (path.isAbsolute(component) || component.includes("..")) {
+    throw new Error(`Invalid ${label}: path traversal not allowed`);
+  }
+}
+
+/**
  * Get full path for a brain file, creating directories if needed
  * @param {string} namespace - Agent namespace (e.g., '01_EDMO', '06_CFO')
  * @param {string} filename - File name
@@ -11,9 +27,18 @@ const BRAIN_BASE = process.env.BRAIN_PATH || "./brain";
  */
 export async function brainPath(namespace, filename) {
   try {
+    validatePathComponent(namespace, "namespace");
+    validatePathComponent(filename, "filename");
     const dirPath = path.join(BRAIN_BASE, "brain", namespace);
     await fs.ensureDir(dirPath);
-    return path.join(dirPath, filename);
+    const fullPath = path.join(dirPath, filename);
+    // Final safety check: resolved path must be under the brain directory
+    const resolvedBase = path.resolve(BRAIN_BASE, "brain");
+    const rel = path.relative(resolvedBase, path.resolve(fullPath));
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error("Path escapes brain directory");
+    }
+    return fullPath;
   } catch (error) {
     await logError("brainPath", { namespace, filename, error: error.message });
     throw error;

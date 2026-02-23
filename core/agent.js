@@ -2,6 +2,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import OpenAI from 'openai';
 import express from 'express';
+import helmet from 'helmet';
 import { checkBudget, recordUsage, isOpen, isPaused } from './bottleneck.js';
 import { brainPath, appendBrain, writeBrain } from './filesystem.js';
 import { createLogger } from './logger.js';
@@ -16,13 +17,15 @@ const _agentRegistry = new Map(); // name → {status,lastRun,tokensUsed,tokensB
 
 function ensureHealthServer() {
   if (_healthServer) return;
+  _healthApp.use(helmet());
   _healthApp.get('/health/:agent', async (req, res) => {
     const info = _agentRegistry.get(req.params.agent);
     if (!info) return res.status(404).json({ error: 'agent not registered' });
 
     // Reflect real circuit / paused state from bottleneck
     let status = 'healthy';
-    if (isOpen(req.params.agent)) status = 'circuit-open';
+    const circuitOpen = await isOpen(req.params.agent);
+    if (circuitOpen) status = 'circuit-open';
     else if (await isPaused(req.params.agent)) status = 'paused';
 
     res.json({
@@ -31,7 +34,7 @@ function ensureHealthServer() {
       lastRun: info.lastRun || null,
       tokensTodayUsed: info.tokensUsed || 0,
       tokensTodayBudget: info.tokensBudget || 0,
-      circuitBreaker: isOpen(req.params.agent) ? 'open' : 'closed',
+      circuitBreaker: circuitOpen ? 'open' : 'closed',
       uptime: Math.floor((Date.now() - info.startedAt) / 1000)
     });
   });
@@ -39,7 +42,7 @@ function ensureHealthServer() {
     const all = {};
     for (const [name, info] of _agentRegistry.entries()) {
       let status = 'healthy';
-      if (isOpen(name)) status = 'circuit-open';
+      if (await isOpen(name)) status = 'circuit-open';
       else if (await isPaused(name)) status = 'paused';
       all[name] = { status, lastRun: info.lastRun, uptime: Math.floor((Date.now() - info.startedAt) / 1000) };
     }
