@@ -9,47 +9,54 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 ## 📐 Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        SLACK WORKSPACE                          │
-│   #00-architect  #01-edmobot  #05-jarvis  #06-cfobot  ...      │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ Socket Mode
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   99-slack-gateway (Bolt)                        │
-│   Routes @hydra <agent> <msg> → Agent.run()                     │
-│   Handles approve/reject buttons, /hydra-status command         │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        ▼                    ▼                    ▼
-┌──────────────┐   ┌──────────────┐     ┌──────────────────────┐
-│  core/agent  │   │  core/db     │     │ core/openclaw-memory │
-│  (OpenRouter │   │  (SQLite)    │     │  Markdown → OpenClaw │
-│   LLM calls) │   │              │     │  memory_search       │
-│  Tool calls  │   │ agent_state  │     │                      │
-│  Retry+Bkoff │   │ debt_tracker │     │  shared_context/     │
-│  Budget check│   │ daily_logs   │     │  ├─ screen/    ←─────│── MacBook Pro
-│  Heartbeat   │   │ paper_trades │     │  ├─ audio/     ←─────│── Plaud Note
-│  Winston log │   │ leads        │     │  └─ notes/           │
-└──────┬───────┘   └──────┬───────┘     └──────┬───────────────┘
-       │                  │                    │ auto-indexed by
-       └──────────────────┼────────────────────┘ OpenClaw Gateway
-                          │
-         ┌────────────────┼────────────────────┐
-         ▼                                     ▼
-┌──────────────────────┐         ┌──────────────────────┐
-│  Mac Mini Internal   │         │  External Sources     │
-│  ~/hydra-brain/      │         │                      │
-│                      │         │  📱 Plaud Note Pro   │
-│  brain/ (agents)     │         │  → audio_inbox/ → 🎤 │
-│  shared_context/     │         │    Whisper → Markdown │
-│  ├─ screen/ (OCR)    │         │                      │
-│  ├─ audio/ (Plaud)   │         │  💻 MacBook Pro      │
-│  └─ notes/ (agents)  │         │  → Screenpipe 24/7   │
-│  lancedb/ (legacy)   │         │  → Ollama summarize  │
-│  hydra.db            │         │  → SSH → screen/*.md  │
-└──────────────────────┘         └──────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          SLACK WORKSPACE                                │
+│   #00-architect  #01-edmobot  #05-jarvis  #06-cfobot  ...              │
+└───────────────────────────┬─────────────────────────────────────────────┘
+                            │ Socket Mode
+                            ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     99-slack-gateway (Bolt)                             │
+│   Routes @hydra <agent> <msg> → Agent.run()                             │
+│   Handles approve/reject buttons, /hydra-status command                 │
+└────────────────┬────────────────────────────────────────────────────────┘
+                 │
+   ┌─────────────┼──────────────────────┐
+   ▼             ▼                      ▼
+┌──────────┐  ┌──────────────┐   ┌───────────────────────┐
+│core/agent│  │  core/db     │   │  core/openclaw-memory │
+│OpenRouter│  │  (SQLite)    │   │  Markdown → OpenClaw  │
+│LLM calls │  │              │   │  memory_search        │
+│Tool calls│  │ agent_state  │   │                       │
+│Retry+Bkof│  │ debt_tracker │   │  shared_context/      │
+│Budget chk│  │ daily_logs   │   │  ├─ screen/  ←────────│── MacBook Pro
+│Heartbeat │  │ paper_trades │   │  ├─ audio/   ←────────│── Plaud Note Pro
+│Winston   │  │ leads        │   │  └─ notes/            │   (via GDrive)
+└─────┬────┘  └──────┬───────┘   └──────────────────────┘
+      │               │                    ▲
+      └───────────────┘                    │ whisper.cpp (local)
+              │                            │ + keyword tagging
+              │              ┌─────────────┴─────────────────┐
+              │              │  scripts/plaud-gdrive-sync     │
+              │              │  Google Drive → audio_inbox/   │
+              │              │  (chokidar watcher → instant   │
+              │              │   transcription via whisper.cpp)│
+              │              └─────────────────────────────────┘
+              │
+              ▼
+┌────────────────────────────┐     ┌──────────────────────────────────┐
+│  mcp/hydra-mcp-server.js   │     │  OpenClaw Gateway                │
+│  (MCP stdio server)        │←────│  (sends/receives messages)       │
+│  Tools exposed to OpenClaw:│     │  ← HYDRA MCP registered here    │
+│  • hydra_home_control      │     └──────────────────────────────────┘
+│  • hydra_read_sensors      │
+│  • hydra_paper_trade       │
+│  • hydra_portfolio         │
+│  • hydra_debt_status       │
+│  • hydra_search_brain      │
+│  • hydra_write_context     │
+│  • hydra_agent_status      │
+└────────────────────────────┘
 ```
 
 ---
@@ -78,7 +85,7 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 
 ## 🧠 Core Modules
 
-### `core/registry.js` ✨ NEW
+### `core/registry.js`
 
 - **Single source of truth** for all agent configuration (name, model, namespace, promptFile, budget tier, Slack channel)
 - Exports: `AGENTS`, `AGENT_NAMES`, `ACTIVE_AGENT_NAMES`, `TIER1`, `TIER2`, `TIER3`, `AGENT_NAMESPACES`
@@ -90,12 +97,12 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 - **Retry with exponential backoff**: 3 attempts (1s → 2s → 4s) on 429/502/503/timeout errors
 - **Budget enforcement**: estimates token usage, checks against per-agent budget via `bottleneck.js`
 - **Graceful shutdown**: SIGTERM/SIGINT handlers clear heartbeat intervals and close health server cleanly
-- **Health endpoint**: shared Express server on port `3002` with `/health` and `/health/:agent` — returns **real circuit-breaker and paused state** (not hardcoded "healthy")
+- **Health endpoint**: shared Express server on port `3002` with `/health` and `/health/:agent` — returns **real circuit-breaker and paused state**
 - **Heartbeat**: writes `heartbeat.json` every 5 minutes to brain storage
 - **Interaction logging**: appends daily logs as JSON to the agent's brain namespace
 - **Winston logging**: structured logs with JSON mode in PM2, pretty-print in dev
 
-### `core/logger.js` ✨ NEW
+### `core/logger.js`
 
 - Winston-based structured logger factory: `createLogger('agent-name')`
 - Auto-detects PM2 environment — JSON output in production, colour-coded pretty-print in dev
@@ -161,6 +168,19 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 - Bearer token authentication for inter-service API calls
 - Express middleware (`validateRequest`) and authenticated fetch (`signedFetch`)
 
+### `mcp/hydra-mcp-server.js` 🚧 Sprint 2
+
+- **MCP server** built on `@modelcontextprotocol/sdk` exposing 8 HYDRA tools to OpenClaw's agent
+- Register once: `openclaw mcp add --name hydra --command "node /Users/aakif/HYDRA/mcp/hydra-mcp-server.js"`
+- Tools: `hydra_home_control`, `hydra_read_sensors`, `hydra_paper_trade`, `hydra_portfolio`, `hydra_debt_status`, `hydra_search_brain`, `hydra_write_context`, `hydra_agent_status`
+- Runs as a PM2 process for always-on availability
+
+### `tests/` 🚧 Sprint 2
+
+- Vitest unit tests for all 7 core modules
+- Mocked externals (OpenRouter, SQLite, OpenClaw CLI) — fast, offline, deterministic
+- Run with `npm test` or `npm run test:watch`
+
 ---
 
 ## 💾 Storage Architecture
@@ -209,12 +229,23 @@ HYDRA/
 │   ├── bottleneck.js          # Budget & circuit breaker (tiers from registry)
 │   ├── db.js                  # SQLite database
 │   ├── filesystem.js          # Brain file I/O
-│   ├── logger.js              # ✨ Winston structured logger factory
+│   ├── logger.js              # Winston structured logger factory
 │   ├── memory.js              # LanceDB vector memory (legacy)
 │   ├── openclaw.js            # OpenClaw Gateway client (retry + gateway cache)
 │   ├── openclaw-memory.js     # Shared brain (OpenClaw memory bridge)
-│   ├── registry.js            # ✨ Centralized agent config registry
+│   ├── registry.js            # Centralized agent config registry
 │   └── validate-env.js        # Per-agent env var validation
+├── mcp/                       # 🚧 Sprint 2 — MCP server
+│   ├── hydra-mcp-server.js    # MCP stdio server exposing 8 HYDRA tools to OpenClaw
+│   └── package.json
+├── tests/                     # 🚧 Sprint 2 — Vitest unit tests
+│   ├── registry.test.js
+│   ├── logger.test.js
+│   ├── validate-env.test.js
+│   ├── bottleneck.test.js
+│   ├── agent.test.js
+│   ├── filesystem.test.js
+│   └── openclaw.test.js
 ├── prompts/                   # System prompts (hot-reloadable)
 │   ├── 00-architect.txt       # Chief of Staff persona
 │   ├── 01-edmobot.txt         # Senior Backend Engineer persona
@@ -232,7 +263,9 @@ HYDRA/
 │   ├── restore.sh             # Restore from B2 backup
 │   ├── cleanup.js             # Daily file cleanup & log rotation
 │   ├── health-sync.js         # Apple Health CSV → JSON
-│   ├── ingest-audio.js        # Plaud Note audio → Whisper → shared brain
+│   ├── ingest-audio.js        # Plaud Note audio → whisper.cpp → shared brain (chokidar)
+│   ├── plaud-gdrive-sync.js   # 🚧 Sprint 2 — Google Drive → audio_inbox via rclone
+│   ├── plaud-api-sync.js      # 🚧 Sprint 2 — Plaud Developer API exploration
 │   └── screenpipe-sync.js     # Screenpipe OCR → JSON (Mac Mini local)
 ├── hydra-screenpipe-sync/     # Laptop-side Screenpipe daemon
 │   ├── sync.js                # Ollama summarizer + SSH sync
@@ -241,8 +274,9 @@ HYDRA/
 │   └── README.md
 ├── docs/                      # Extended documentation
 │   └── openclaw-guide.md      # OpenClaw setup & usage (full guide)
-├── .eslintrc.cjs              # ✨ ESLint config for Node.js ESM
-├── jsconfig.json              # ✨ Editor type checking (checkJs)
+├── .eslintrc.cjs              # ESLint config for Node.js ESM
+├── jsconfig.json              # Editor type checking (checkJs)
+├── vitest.config.js           # 🚧 Sprint 2 — Vitest config
 ├── ecosystem.config.cjs       # PM2 process manager config
 ├── package.json
 ├── sample.env                 # Full env var reference
@@ -332,6 +366,10 @@ npm run stop      # pm2 stop all
 # Lint (ESLint with Node.js ESM config)
 npm run lint
 npm run lint:fix
+
+# Unit tests (Vitest — 🚧 Sprint 2)
+npm test              # single run
+npm run test:watch    # watch mode
 
 # Editor type checking: open in VS Code or Cursor
 # jsconfig.json enables checkJs for all core/ agents/ scripts/
@@ -462,17 +500,58 @@ Key notes:
 - Incoming: OpenClaw forwards messages to SocialBot's webhook at `http://127.0.0.1:3004/social/incoming`
 - CLI calls include **retry logic** (2 attempts) and a **60-second gateway availability cache**
 
+### MCP Server (Sprint 2 🚧)
+
+Once `mcp/hydra-mcp-server.js` is built, register it with OpenClaw once:
+
+```bash
+openclaw mcp add --name hydra --command "node /Users/aakif/HYDRA/mcp/hydra-mcp-server.js"
+```
+
+After registration, OpenClaw's agent can use HYDRA tools naturally:
+
+```
+You: what's the temperature at home?
+OpenClaw → calls hydra_read_sensors → Jarvis HA API → "28°C, motion: clear"
+
+You: turn on the AC
+OpenClaw → calls hydra_home_control { device: "ac", action: "turn_on" } → "AC on, target 22°C"
+
+You: what's my debt status?
+OpenClaw → calls hydra_debt_status → "₹11.2L remaining, ₹1.3L paid (10.4%)"
+```
+
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] **Phase 2 Agents**
-  - `08-careerbot` — Career strategy, resume tracking, salary benchmarking
-- [ ] **Dashboard** — Web UI for HYDRA status, agent logs, and controls
-- [ ] **Voice Interface** — Audio commands via Whisper transcription
-- [ ] **Real NSE API** — Live market data for Wolf paper trading
-- [ ] **SMS Automation** — Auto-scrape transaction SMS for CFOBot
-- [ ] **Test Suite** — Vitest unit tests for core modules
+### ✅ Sprint 1 — Hardening & DX
+
+- [x] Centralized agent registry (`core/registry.js`)
+- [x] Winston structured logging (`core/logger.js`)
+- [x] LLM retry with exponential backoff
+- [x] Graceful SIGTERM/SIGINT shutdown
+- [x] Real health endpoint (circuit-breaker aware)
+- [x] Per-agent `validateEnv()`
+- [x] OpenClaw retry + gateway availability cache
+- [x] ESLint + jsconfig.json
+- [x] System prompts for all 11 agents (v5.0)
+
+### 🚧 Sprint 2 — Tests, MCP, Audio
+
+- [ ] Vitest unit tests for all core modules
+- [ ] HYDRA MCP server (`mcp/hydra-mcp-server.js`) — 8 tools for OpenClaw
+- [ ] Plaud Note Pro: real-time audio ingestion via Google Drive + chokidar + whisper.cpp
+- [ ] Plaud Developer API exploration
+- [ ] OpenClaw memory enhancements (`writeAgentDecision`, `getContextForAgent`)
+- [ ] Context injection into Architect, CFO, BioBot LLM calls
+
+### 📋 Backlog
+
+- [ ] `08-careerbot` — Career strategy & skill gaps
+- [ ] Dashboard — Web UI for HYDRA status, logs, and controls
+- [ ] Real NSE API — Live market data for Wolf
+- [ ] SMS Automation — Auto-scrape transaction SMS for CFOBot
 
 ---
 
@@ -491,11 +570,16 @@ Key notes:
 | Home Automation | Home Assistant REST API                                                             |
 | Market Research | Perplexity API (Sonar)                                                              |
 | Messaging       | OpenClaw Gateway (WhatsApp, iMessage, Discord, Telegram)                            |
+| MCP Server      | @modelcontextprotocol/sdk (🚧 Sprint 2)                                             |
+| Transcription   | whisper.cpp local (🚧 Sprint 2) — fallback: OpenRouter Whisper API                  |
+| Plaud Sync      | Google Drive rclone + Plaud Developer API (🚧 Sprint 2)                             |
+| File Watching   | chokidar (🚧 Sprint 2)                                                              |
 | Backup          | rclone + Backblaze B2 (encrypted)                                                   |
 | Logging         | Winston (JSON in PM2, pretty-print in dev)                                          |
 | Linting         | ESLint (Node.js ESM flat config)                                                    |
+| Testing         | Vitest (🚧 Sprint 2)                                                                |
 | Brain Storage   | Mac Mini internal SSD                                                               |
-| Heavy Data      | External SSD                                                                        |
+| Heavy Data      | External SSD / Google Drive                                                         |
 
 ---
 
