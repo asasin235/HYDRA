@@ -2,12 +2,12 @@ import fs from 'fs-extra';
 import path from 'path';
 import OpenAI from 'openai';
 import express from 'express';
-import { checkBudget, recordUsage } from './bottleneck.js';
+import { checkBudget, recordUsage, isOpen, isPaused } from './bottleneck.js';
 import { brainPath, appendBrain, writeBrain } from './filesystem.js';
+import { createLogger } from './logger.js';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const HEALTH_PORT = Number(process.env.HEALTH_PORT || 3002);
-const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 
 // ── Shared health-check Express app (one server for all agents) ───────────────
 const _healthApp = express();
@@ -16,23 +16,32 @@ const _agentRegistry = new Map(); // name → {status,lastRun,tokensUsed,tokensB
 
 function ensureHealthServer() {
   if (_healthServer) return;
-  _healthApp.get('/health/:agent', (req, res) => {
+  _healthApp.get('/health/:agent', async (req, res) => {
     const info = _agentRegistry.get(req.params.agent);
     if (!info) return res.status(404).json({ error: 'agent not registered' });
+
+    // Reflect real circuit / paused state from bottleneck
+    let status = 'healthy';
+    if (isOpen(req.params.agent)) status = 'circuit-open';
+    else if (await isPaused(req.params.agent)) status = 'paused';
+
     res.json({
       agent: req.params.agent,
-      status: 'healthy',
+      status,
       lastRun: info.lastRun || null,
       tokensTodayUsed: info.tokensUsed || 0,
       tokensTodayBudget: info.tokensBudget || 0,
-      circuitBreaker: info.circuit || 'closed',
+      circuitBreaker: isOpen(req.params.agent) ? 'open' : 'closed',
       uptime: Math.floor((Date.now() - info.startedAt) / 1000)
     });
   });
-  _healthApp.get('/health', (req, res) => {
+  _healthApp.get('/health', async (req, res) => {
     const all = {};
     for (const [name, info] of _agentRegistry.entries()) {
-      all[name] = { status: 'healthy', lastRun: info.lastRun, uptime: Math.floor((Date.now() - info.startedAt) / 1000) };
+      let status = 'healthy';
+      if (isOpen(name)) status = 'circuit-open';
+      else if (await isPaused(name)) status = 'paused';
+      all[name] = { status, lastRun: info.lastRun, uptime: Math.floor((Date.now() - info.startedAt) / 1000) };
     }
     res.json(all);
   });
@@ -59,20 +68,81 @@ function estimateTokensFromMessages(messages) {
   return Math.ceil(text.length / 4);
 }
 
+/**
+ * Convert agent tool definitions to OpenAI-compatible tool schemas.
+ * Tools should define a `parameters` field following JSON Schema format.
+ * @param {Array<{name:string, description:string, parameters?:object, execute:Function}>} tools
+ */
 function toOpenAITools(tools) {
-  if (!Array.isArray(tools)) return undefined;
+  if (!Array.isArray(tools) || tools.length === 0) return undefined;
   return tools.map(t => ({
     type: 'function',
     function: {
       name: t.name,
       description: t.description || '',
-      parameters: {
+      parameters: t.parameters || {
         type: 'object',
         properties: {},
         additionalProperties: true
       }
     }
   }));
+}
+
+/**
+ * Sleep for a given number of milliseconds.
+ * @param {number} ms
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Determine whether an OpenAI/OpenRouter error is retryable.
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function isRetryableError(err) {
+  const msg = err.message || '';
+  const status = err.status || err.response?.status;
+  // Rate limits, server errors, and timeouts are retryable
+  return (
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('timeout')
+  );
+}
+
+/**
+ * Call the OpenAI/OpenRouter API with exponential backoff retry.
+ * @param {Function} fn - Async function that returns an API response
+ * @param {string} agentName - For logging
+ * @param {import('winston').Logger} log - Logger instance
+ * @param {number} [maxAttempts=3]
+ * @returns {Promise<any>}
+ */
+async function withRetry(fn, agentName, log, maxAttempts = 3) {
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt++;
+      if (attempt >= maxAttempts || !isRetryableError(err)) {
+        throw err;
+      }
+      const delayMs = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s
+      log.warn(`LLM call failed (attempt ${attempt}/${maxAttempts}), retrying in ${delayMs}ms`, {
+        error: err.message,
+        status: err.status
+      });
+      await sleep(delayMs);
+    }
+  }
 }
 
 export default class Agent {
@@ -85,12 +155,30 @@ export default class Agent {
     this.tokenBudget = tokenBudget;
     this.systemPrompt = '';
     this._startedAt = Date.now();
+    this.log = createLogger(name);
+
     // Register with health server
     _agentRegistry.set(this.name, { lastRun: null, tokensUsed: 0, tokensBudget: tokenBudget, circuit: 'closed', startedAt: this._startedAt });
     ensureHealthServer();
+
     // Write heartbeat every 5 minutes
     this._heartbeatInterval = setInterval(() => this.#writeHeartbeat(), 5 * 60 * 1000);
     this.#writeHeartbeat(); // initial heartbeat on startup
+
+    // Graceful shutdown: clear intervals and close health server
+    const shutdown = () => {
+      this.log.info('Shutting down gracefully…');
+      clearInterval(this._heartbeatInterval);
+      // Only close the shared health server if this is the last registered agent
+      if (_healthServer && _agentRegistry.size <= 1) {
+        _healthServer.close(() => {
+          this.log.info('Health server closed.');
+        });
+      }
+      _agentRegistry.delete(this.name);
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
   }
 
   async reloadPrompt() {
@@ -104,9 +192,12 @@ export default class Agent {
         : path.join(process.cwd(), this.systemPromptPath);
       const exists = await fs.pathExists(resolved);
       this.systemPrompt = exists ? await fs.readFile(resolved, 'utf-8') : '';
+      if (!exists) {
+        this.log.warn(`System prompt not found at ${resolved} — running without persona`);
+      }
       return this.systemPrompt;
     } catch (error) {
-      console.error(`[agent:${this.name}] reloadPrompt error:`, error.message);
+      this.log.error('reloadPrompt error', { error: error.message });
       this.systemPrompt = '';
       return '';
     }
@@ -136,28 +227,33 @@ export default class Agent {
       // Budget enforcement (estimate)
       const estimated = estimateTokensFromMessages(messages);
       const within = await checkBudget(this.name, estimated);
-      if (!within || estimated > this.tokenBudget) {
-        const msg = `Agent ${this.name} budget exceeded. Estimated tokens ${estimated} / limit ${this.tokenBudget}.`;
+      if (!within) {
+        const msg = `Agent ${this.name} budget exceeded or circuit open. Estimated tokens: ${estimated}.`;
+        this.log.warn('Blocked by budget/circuit breaker', { estimated, budget: this.tokenBudget });
         await this.#logInteraction(userMessage, '(blocked by budget)', { inputTokens: estimated, outputTokens: 0 });
         return msg;
       }
 
       const toolsDef = toOpenAITools(this.tools);
 
-      // Initial model call
-      const first = await openai.chat.completions.create({
-        model: this.model,
-        messages,
-        tools: toolsDef,
-        tool_choice: toolsDef ? 'auto' : undefined,
-        temperature: 0.4
-      });
+      // Initial model call — with retry
+      const first = await withRetry(
+        () => openai.chat.completions.create({
+          model: this.model,
+          messages,
+          tools: toolsDef,
+          tool_choice: toolsDef ? 'auto' : undefined,
+          temperature: 0.4
+        }),
+        this.name,
+        this.log
+      );
 
       let promptTokens = first.usage?.prompt_tokens || estimated;
-      let completionTokens = first.usage?.completion_tokens || (first.choices?.[0]?.message?.content?.length || 0) / 4 | 0;
+      let completionTokens = first.usage?.completion_tokens || Math.ceil((first.choices?.[0]?.message?.content?.length || 0) / 4);
 
       let assistantMessage = first.choices?.[0]?.message || { role: 'assistant', content: '' };
-      const transcript = [ ...messages, assistantMessage ];
+      const transcript = [...messages, assistantMessage];
 
       // Handle tool calls if any
       if (assistantMessage.tool_calls && Array.isArray(assistantMessage.tool_calls) && this.tools?.length) {
@@ -176,6 +272,7 @@ export default class Agent {
             }
           } catch (e) {
             toolResult = `Tool execution error: ${e.message}`;
+            this.log.error('Tool execution failed', { tool: toolName, error: e.message });
           }
           transcript.push({
             role: 'tool',
@@ -185,12 +282,16 @@ export default class Agent {
           });
         }
 
-        // Follow-up model call with tool results
-        const second = await openai.chat.completions.create({
-          model: this.model,
-          messages: transcript,
-          temperature: 0.4
-        });
+        // Follow-up model call with tool results — also with retry
+        const second = await withRetry(
+          () => openai.chat.completions.create({
+            model: this.model,
+            messages: transcript,
+            temperature: 0.4
+          }),
+          this.name,
+          this.log
+        );
         assistantMessage = second.choices?.[0]?.message || assistantMessage;
         promptTokens += second.usage?.prompt_tokens || 0;
         completionTokens += second.usage?.completion_tokens || 0;
@@ -207,15 +308,17 @@ export default class Agent {
       reg.tokensUsed = (reg.tokensUsed || 0) + promptTokens + completionTokens;
       _agentRegistry.set(this.name, reg);
 
+      this.log.info('Run complete', { inputTokens: promptTokens, outputTokens: completionTokens });
+
       // Log interaction
       await this.#logInteraction(userMessage, finalText, { inputTokens: promptTokens, outputTokens: completionTokens });
 
       return finalText;
     } catch (error) {
-      console.error(`[agent:${this.name}] run error:`, error.message);
+      this.log.error('run error', { error: error.message });
       try {
         await this.#logInteraction(userMessage, `ERROR: ${error.message}`, { inputTokens: 0, outputTokens: 0 });
-      } catch {}
+      } catch { }
       return `Agent ${this.name} failed: ${error.message}`;
     }
   }
@@ -224,7 +327,7 @@ export default class Agent {
     try {
       await writeBrain(this.namespace, 'heartbeat.json', { ts: Date.now(), status: 'alive', agent: this.name });
     } catch (e) {
-      // Heartbeat write failures are non-fatal
+      // Heartbeat write failures are non-fatal — don't log to avoid noise
     }
   }
 
@@ -241,7 +344,7 @@ export default class Agent {
       };
       await appendBrain(this.namespace, filename, entry);
     } catch (error) {
-      console.error(`[agent:${this.name}] log error:`, error.message);
+      this.log.error('log error', { error: error.message });
     }
   }
 }

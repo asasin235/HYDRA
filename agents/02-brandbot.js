@@ -6,7 +6,7 @@ import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { writeBrain, readBrain } from '../core/filesystem.js';
 
-validateEnv();
+validateEnv('02-brandbot');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#02-brandbot';

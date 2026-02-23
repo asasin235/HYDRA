@@ -7,7 +7,7 @@ import Agent from '../core/agent.js';
 import { addTrade, getTrades } from '../core/db.js';
 import { writeBrain, readBrain } from '../core/filesystem.js';
 
-validateEnv();
+validateEnv('09-wolf');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#09-wolf';

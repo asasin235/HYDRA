@@ -6,7 +6,7 @@ import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { writeBrain, brainPath } from '../core/filesystem.js';
 
-validateEnv();
+validateEnv('01-edmobot');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#01-edmobot';

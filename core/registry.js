@@ -1,0 +1,58 @@
+/**
+ * core/registry.js — Single source of truth for all HYDRA agent configuration.
+ *
+ * Previously this metadata was duplicated across:
+ *   - agents/00-architect.js (AGENTS array + AGENT_NAMESPACES map)
+ *   - agents/11-auditor.js   (AGENT_REGISTRY object)
+ *   - core/bottleneck.js     (TIER1/TIER2/TIER3 arrays)
+ *
+ * This file is now the authoritative source. All other files should import from here.
+ */
+
+/**
+ * @typedef {Object} AgentConfig
+ * @property {string} namespace     - Brain storage namespace (e.g. '01_EDMO')
+ * @property {string} model         - OpenRouter model string
+ * @property {string} promptFile    - Filename under prompts/ directory
+ * @property {1|2|3}  tier          - Budget tier (1=critical, 2=important, 3=optional)
+ * @property {string} [slackChannel] - Agent's default Slack channel
+ */
+
+/** @type {Object.<string, AgentConfig>} */
+export const AGENTS = {
+  '00-architect':   { namespace: '00_ARCHITECT',  model: 'google/gemini-flash-3',         promptFile: '00-architect.txt',   tier: 1, slackChannel: '#00-architect' },
+  '01-edmobot':     { namespace: '01_EDMO',       model: 'anthropic/claude-sonnet-4',      promptFile: '01-edmobot.txt',     tier: 1, slackChannel: '#01-edmobot' },
+  '02-brandbot':    { namespace: '02_BRAND',      model: 'mistral/mistral-small',          promptFile: '02-brandbot.txt',    tier: 3, slackChannel: '#02-brandbot' },
+  '03-sahibabot':   { namespace: '03_SAHIBA',     model: 'mistral/mistral-small',          promptFile: '03-sahibabot.txt',   tier: 2, slackChannel: '#03-sahibabot' },
+  '04-socialbot':   { namespace: '04_SOCIAL',     model: 'anthropic/claude-haiku-4-5',     promptFile: '04-socialbot.txt',   tier: 2, slackChannel: '#04-socialbot' },
+  '05-jarvis':      { namespace: '05_JARVIS',     model: 'google/gemini-flash-3',          promptFile: '05-jarvis.txt',      tier: 2, slackChannel: '#05-jarvis' },
+  '06-cfobot':      { namespace: '06_CFO',        model: 'deepseek/deepseek-r1',           promptFile: '06-cfobot.txt',      tier: 1, slackChannel: '#06-cfobot' },
+  '07-biobot':      { namespace: '07_BIO',        model: 'google/gemini-flash-3',          promptFile: '07-biobot.txt',      tier: 2, slackChannel: '#07-biobot' },
+  '09-wolf':        { namespace: '09_WOLF',       model: 'deepseek/deepseek-r1',           promptFile: '09-wolf.txt',        tier: 3, slackChannel: '#09-wolf' },
+  '10-mercenary':   { namespace: '10_MERCENARY',  model: 'anthropic/claude-sonnet-4',      promptFile: '10-mercenary.txt',   tier: 3, slackChannel: '#10-mercenary' },
+  '11-auditor':     { namespace: '11_AUDITOR',    model: 'google/gemini-flash-3',          promptFile: '11-auditor.txt',     tier: 3, slackChannel: '#11-auditor' },
+  '99-slack-gateway': { namespace: '99_GATEWAY',  model: null,                             promptFile: null,                 tier: 1, slackChannel: null },
+};
+
+/** All agent names in order */
+export const AGENT_NAMES = Object.keys(AGENTS);
+
+/** Agent names that have their own processes (no reserved/gateway) */
+export const ACTIVE_AGENT_NAMES = AGENT_NAMES.filter(n => !['99-slack-gateway'].includes(n));
+
+/** Tier 1: critical — run up to 100% budget */
+export const TIER1 = AGENT_NAMES.filter(n => AGENTS[n].tier === 1);
+
+/** Tier 2: important — paused at 80% budget utilisation */
+export const TIER2 = AGENT_NAMES.filter(n => AGENTS[n].tier === 2);
+
+/** Tier 3: optional — paused at 60% budget utilisation */
+export const TIER3 = AGENT_NAMES.filter(n => AGENTS[n].tier === 3);
+
+/**
+ * Map of agent name → namespace (for watchdog / heartbeat lookups)
+ * @type {Object.<string, string>}
+ */
+export const AGENT_NAMESPACES = Object.fromEntries(
+  AGENT_NAMES.map(n => [n, AGENTS[n].namespace])
+);

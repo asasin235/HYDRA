@@ -6,7 +6,7 @@ import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { getDebt, setDebt } from '../core/db.js';
 
-validateEnv();
+validateEnv('06-cfobot');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#06-cfobot';

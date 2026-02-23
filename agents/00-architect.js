@@ -7,8 +7,9 @@ import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { getLogs, getDebt, setState } from '../core/db.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
+import { AGENT_NAMES, AGENT_NAMESPACES } from '../core/registry.js';
 
-validateEnv();
+validateEnv('00-architect');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_STATUS_CHANNEL = '#00-architect';
@@ -22,9 +23,8 @@ const architect = new Agent({
   tokenBudget: 500000
 });
 
-const AGENTS = [
-  '00-architect','01-edmobot','02-brandbot','03-sahibabot','04-socialbot','05-jarvis','06-cfobot','07-biobot','09-wolf','10-mercenary','11-auditor','99-slack-gateway'
-];
+// Agent list imported from registry — no more hardcoded duplicates
+const AGENTS = AGENT_NAMES;
 
 async function postSlack(text) {
   if (!SLACK_BOT_TOKEN) return;
@@ -110,19 +110,7 @@ async function buildEveningSummary() {
 
 // Watchdog: check agent heartbeats every 30 minutes
 const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
-const AGENT_NAMESPACES = {
-  '01-edmobot':      '01_EDMO',
-  '02-brandbot':     '02_BRAND',
-  '03-sahibabot':    '03_SAHIBA',
-  '04-socialbot':    '04_SOCIAL',
-  '05-jarvis':       '05_JARVIS',
-  '06-cfobot':       '06_CFO',
-  '07-biobot':       '07_BIO',
-  '09-wolf':         '09_WOLF',
-  '10-mercenary':    '10_MERCENARY',
-  '11-auditor':      '11_AUDITOR',
-  '99-slack-gateway':'99_GATEWAY'
-};
+// Agent namespace map imported from core/registry.js
 
 function getPm2OnlineAgents() {
   try {
