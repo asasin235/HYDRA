@@ -34,7 +34,8 @@ export async function brainPath(namespace, filename) {
     const fullPath = path.join(dirPath, filename);
     // Final safety check: resolved path must be under the brain directory
     const resolvedBase = path.resolve(BRAIN_BASE, "brain");
-    if (!path.resolve(fullPath).startsWith(resolvedBase)) {
+    const rel = path.relative(resolvedBase, path.resolve(fullPath));
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error("Path escapes brain directory");
     }
     return fullPath;
