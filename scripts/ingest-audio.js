@@ -18,6 +18,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { detectTags } from './audio-tagger.js';
 import { writeAudioTranscript } from '../core/openclaw-memory.js';
 
 const execFileAsync = promisify(execFile);
@@ -179,8 +180,11 @@ async function processAudioFile(filePath) {
 
         const durationS = null; // Could be extracted with ffprobe if needed
 
+        // Extract tags and agent routing (only for newly generated transcripts)
+        const metadata = sidecar ? {} : detectTags(transcript);
+
         // Write to shared brain
-        await writeAudioTranscript('plaud-note', filename, transcript, summary, durationS);
+        await writeAudioTranscript('plaud-note', filename, transcript, summary, durationS, metadata);
 
         // Move to processed
         await fs.ensureDir(PROCESSED_DIR);

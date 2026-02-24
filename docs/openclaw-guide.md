@@ -499,7 +499,7 @@ The MCP server runs locally and is only accessible to OpenClaw on the same machi
 
 ---
 
-## Part 8: Plaud Note Pro Audio Ingestion 🚧 Sprint 2
+## Part 8: Plaud Note Pro Audio Ingestion
 
 HYDRA supports two methods for getting Plaud Note Pro recordings into the shared brain automatically.
 

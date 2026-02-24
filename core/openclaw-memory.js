@@ -80,12 +80,21 @@ export async function writeScreenActivity(source, summary, apps = []) {
  * @param {string} transcript - Full transcript text
  * @param {string} summary - LLM-generated summary
  * @param {number} [durationS] - Duration in seconds
+ * @param {Object} [metadata] - Optional frontmatter tags and agents
+ * @param {string[]} [metadata.tags]
+ * @param {string[]} [metadata.agents]
  */
-export async function writeAudioTranscript(source, filename, transcript, summary, durationS) {
+export async function writeAudioTranscript(source, filename, transcript, summary, durationS, metadata = {}) {
     await ensureDirs();
     const file = path.join(AUDIO_DIR, `${today()}.md`);
     const duration = durationS ? ` (${Math.round(durationS / 60)}min)` : '';
-    const entry = `\n## ${timeNow()} — ${source}: ${filename}${duration}\n\n**Summary:** ${summary}\n\n<details>\n<summary>Full transcript</summary>\n\n${transcript}\n\n</details>\n`;
+    
+    let tagLine = '';
+    if (metadata.tags?.length || metadata.agents?.length) {
+        tagLine = `\n**Tags:** [${metadata.tags?.join(', ') || ''}] | **Agents:** [${metadata.agents?.join(', ') || ''}]\n`;
+    }
+
+    const entry = `\n## ${timeNow()} — ${source}: ${filename}${duration}${tagLine}\n**Summary:** ${summary}\n\n<details>\n<summary>Full transcript</summary>\n\n${transcript}\n\n</details>\n`;
 
     await fs.appendFile(file, entry, 'utf-8');
     console.log(`[openclaw-memory] Audio transcript written → ${file}`);
