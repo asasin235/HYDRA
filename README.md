@@ -263,9 +263,9 @@ HYDRA/
 │   ├── restore.sh             # Restore from B2 backup
 │   ├── cleanup.js             # Daily file cleanup & log rotation
 │   ├── health-sync.js         # Apple Health CSV → JSON
-│   ├── ingest-audio.js        # Plaud Note audio → whisper.cpp → shared brain (chokidar)
-│   ├── plaud-gdrive-sync.js   # 🚧 Sprint 2 — Google Drive → audio_inbox via rclone
-│   ├── plaud-api-sync.js      # 🚧 Sprint 2 — Plaud Developer API exploration
+│   ├── ingest-audio.js        # Audio → local whisper.cpp + Ollama → shared brain
+│   ├── plaud-sync.js          # Plaud API → whisper.cpp → Claude → Drive + audio_inbox
+│   ├── setup-whisper.sh       # whisper.cpp + model installer (Apple Silicon Metal)
 │   └── screenpipe-sync.js     # Screenpipe OCR → JSON (Mac Mini local)
 ├── hydra-screenpipe-sync/     # Laptop-side Screenpipe daemon
 │   ├── sync.js                # Ollama summarizer + SSH sync
@@ -523,6 +523,98 @@ OpenClaw → calls hydra_debt_status → "₹11.2L remaining, ₹1.3L paid (10.4
 
 ---
 
+## 🎙️ Plaud Recording Pipeline
+
+Automated call recording processing: Plaud AI → whisper.cpp → Claude → Google Drive.
+
+### How It Works
+
+1. **`plaud-sync.js`** polls the Plaud REST API every 5 minutes for new recordings
+2. Downloads the MP3 via presigned URL
+3. Uploads raw MP3 to Google Drive (`/PlaudRecordings/`)
+4. Transcribes locally via **whisper.cpp** (Apple Silicon Metal GPU)
+5. Sends transcript to **Claude Sonnet** for rich summarization:
+   - Meeting summary (5–7 sentences)
+   - Key decisions (bullet list)
+   - Action items (markdown checklist with owner + deadline)
+   - Mind map (Mermaid.js)
+   - Top 5 highlights / notable quotes
+   - Handles Hinglish (Hindi + English) → always outputs English
+6. Drops `.mp3` + `.md` into `audio_inbox/`
+7. **`ingest-audio.js`** picks up the files, writes to shared brain context
+8. State tracked in `processed_ids.json` — no duplicates across restarts
+
+### Setup: whisper.cpp (Apple Silicon with Metal)
+
+Run the included setup script:
+
+```bash
+chmod +x scripts/setup-whisper.sh
+bash scripts/setup-whisper.sh
+```
+
+This will:
+
+1. Clone `whisper.cpp` to `~/whisper.cpp`
+2. Build with **CMake + Metal** (Apple GPU acceleration)
+3. Download the `ggml-large-v3-q5_0` quantized model (~1.5 GB)
+4. Print the `WHISPER_CPP_PATH` and `WHISPER_MODEL_PATH` to add to your `.env`
+
+**Manual install** (if the script doesn't work):
+
+```bash
+# Prerequisites
+brew install cmake
+
+# Clone & build
+git clone https://github.com/ggerganov/whisper.cpp.git ~/whisper.cpp
+cd ~/whisper.cpp && mkdir build && cd build
+cmake .. -DWHISPER_METAL=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release -j $(sysctl -n hw.ncpu)
+
+# Download model
+mkdir -p ~/models
+curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin \
+  -o ~/models/ggml-large-v3-q5_0.bin
+
+# Test
+~/whisper.cpp/build/bin/whisper-cli -m ~/models/ggml-large-v3-q5_0.bin -f /path/to/test.mp3
+```
+
+### Setup: Google Service Account (for Drive uploads)
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or select existing)
+3. Enable the **Google Drive API** (APIs & Services → Enable)
+4. Go to **IAM & Admin → Service Accounts** → Create Service Account
+5. Give it a name like `hydra-plaud-sync`
+6. Click the new service account → **Keys** tab → **Add Key** → **JSON**
+7. Download the JSON key file to `~/hydra-brain/credentials/google-sa.json`
+8. In Google Drive, create a folder `/PlaudRecordings/`
+9. **Share** the folder with the service account email (found in the JSON, `client_email` field)
+10. Copy the folder ID from the URL: `https://drive.google.com/drive/folders/FOLDER_ID_HERE`
+11. Set env vars:
+
+```env
+GOOGLE_SERVICE_ACCOUNT_PATH=~/hydra-brain/credentials/google-sa.json
+GOOGLE_DRIVE_FOLDER_ID=your-folder-id
+```
+
+### Environment Variables
+
+| Variable                      | Required        | Description                                                   |
+| ----------------------------- | --------------- | ------------------------------------------------------------- |
+| `PLAUD_API_KEY`               | ✅ plaud-sync   | Plaud API Bearer token                                        |
+| `ANTHROPIC_API_KEY`           | ✅ plaud-sync   | Claude Sonnet for summarization                               |
+| `WHISPER_CPP_PATH`            | ✅ both         | Path to whisper.cpp binary                                    |
+| `WHISPER_MODEL_PATH`          | ✅ both         | Path to ggml model file                                       |
+| `GOOGLE_SERVICE_ACCOUNT_PATH` | 🔶 plaud-sync   | SA JSON key (Drive upload skipped without it)                 |
+| `GOOGLE_DRIVE_FOLDER_ID`      | 🔶 plaud-sync   | Target Drive folder ID                                        |
+| `OLLAMA_MODEL`                | 🔶 ingest-audio | Local model for fallback summarization (default: `gemma3:4b`) |
+| `OLLAMA_URL`                  | 🔶 ingest-audio | Ollama API URL (default: `http://localhost:11434`)            |
+
+---
+
 ## 🗺️ Roadmap
 
 ### ✅ Sprint 1 — Hardening & DX
@@ -541,8 +633,9 @@ OpenClaw → calls hydra_debt_status → "₹11.2L remaining, ₹1.3L paid (10.4
 
 - [ ] Vitest unit tests for all core modules
 - [ ] HYDRA MCP server (`mcp/hydra-mcp-server.js`) — 8 tools for OpenClaw
-- [ ] Plaud Note Pro: real-time audio ingestion via Google Drive + chokidar + whisper.cpp
-- [ ] Plaud Developer API exploration
+- [x] Plaud API → whisper.cpp → Claude → Google Drive pipeline (`plaud-sync.js`)
+- [x] Local-only ingest-audio (whisper.cpp + Ollama, no OpenRouter)
+- [x] whisper.cpp setup script with Apple Silicon Metal support
 - [ ] OpenClaw memory enhancements (`writeAgentDecision`, `getContextForAgent`)
 - [ ] Context injection into Architect, CFO, BioBot LLM calls
 
@@ -571,9 +664,9 @@ OpenClaw → calls hydra_debt_status → "₹11.2L remaining, ₹1.3L paid (10.4
 | Market Research | Perplexity API (Sonar)                                                              |
 | Messaging       | OpenClaw Gateway (WhatsApp, iMessage, Discord, Telegram)                            |
 | MCP Server      | @modelcontextprotocol/sdk (🚧 Sprint 2)                                             |
-| Transcription   | whisper.cpp local (🚧 Sprint 2) — fallback: OpenRouter Whisper API                  |
-| Plaud Sync      | Google Drive rclone + Plaud Developer API (🚧 Sprint 2)                             |
-| File Watching   | chokidar (🚧 Sprint 2)                                                              |
+| Transcription   | whisper.cpp local (Apple Silicon Metal GPU)                                         |
+| Plaud Sync      | Plaud REST API → Claude Sonnet → Google Drive                                       |
+| Local Summary   | Ollama (gemma3:4b) for offline summarization in ingest-audio                        |
 | Backup          | rclone + Backblaze B2 (encrypted)                                                   |
 | Logging         | Winston (JSON in PM2, pretty-print in dev)                                          |
 | Linting         | ESLint (Node.js ESM flat config)                                                    |
