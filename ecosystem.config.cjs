@@ -16,6 +16,7 @@ module.exports = {
     app('99-slack-gateway'),
     // Scripts (data pipelines)
     script('ingest-audio', './scripts/ingest-audio.js'),
+    script('plaud-sync', './scripts/plaud-sync.js'),
     script('screenpipe-sync', './scripts/screenpipe-sync.js'),
   ],
   // Custom groups for convenience

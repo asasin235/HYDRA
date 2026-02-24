@@ -2,8 +2,11 @@
  * scripts/ingest-audio.js — Audio transcription pipeline for Plaud Note Pro
  *
  * Watches a directory for audio files (MP3/WAV/M4A), transcribes them
- * via OpenAI Whisper API (through OpenRouter), summarizes via local Ollama
- * or OpenRouter, and writes results as Markdown to the shared context directory.
+ * locally via whisper.cpp, summarizes via local Ollama model,
+ * and writes results as Markdown to the shared context directory.
+ *
+ * If a .md sidecar file exists (produced by plaud-sync.js), the rich
+ * AI summary is used directly instead of re-summarizing.
  *
  * Processed files are moved to a 'processed/' subdirectory.
  *
@@ -13,106 +16,97 @@
  */
 import fs from 'fs-extra';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { writeAudioTranscript } from '../core/openclaw-memory.js';
+
+const execFileAsync = promisify(execFile);
 
 const AUDIO_INBOX = (process.env.AUDIO_INBOX_DIR || '~/hydra-brain/audio_inbox')
     .replace(/^~/, process.env.HOME);
 const PROCESSED_DIR = path.join(AUDIO_INBOX, 'processed');
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const WHISPER_MODE = process.env.WHISPER_MODE || 'api'; // 'api' or 'local'
+const WHISPER_CPP_PATH = process.env.WHISPER_CPP_PATH || '/usr/local/bin/whisper-cpp';
+const WHISPER_MODEL_PATH = (process.env.WHISPER_MODEL_PATH || '~/models/ggml-large-v3-q5_0.bin')
+    .replace(/^~/, process.env.HOME);
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gemma3:4b';
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const POLL_INTERVAL = Number(process.env.AUDIO_POLL_INTERVAL || 60000); // 60s
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.ogg', '.webm', '.flac'];
-const MAX_FILE_SIZE_MB = 25; // Whisper API limit
+const MAX_FILE_SIZE_MB = 25;
 
 /**
- * Transcribe audio via OpenRouter Whisper API
- */
-async function transcribeViaAPI(filePath) {
-    if (!OPENROUTER_API_KEY) {
-        throw new Error('OPENROUTER_API_KEY not set');
-    }
-
-    const fileBuffer = await fs.readFile(filePath);
-    const fileName = path.basename(filePath);
-
-    const formData = new FormData();
-    formData.append('file', new Blob([fileBuffer]), fileName);
-    formData.append('model', 'openai/whisper-1');
-
-    const response = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-            'HTTP-Referer': 'https://hydra.local',
-            'X-Title': 'HYDRA'
-        },
-        body: formData
-    });
-
-    if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Whisper API error: ${error}`);
-    }
-
-    const data = await response.json();
-    return data.text || '';
-}
-
-/**
- * Transcribe audio via local OpenClaw whisper skill
+ * Transcribe audio via local whisper.cpp binary
  */
 async function transcribeLocal(filePath) {
-    const { execFile } = await import('child_process');
-    const { promisify } = await import('util');
-    const execFileAsync = promisify(execFile);
+    console.log(`[ingest-audio] 🎙️  Transcribing with whisper.cpp: ${path.basename(filePath)}`);
 
-    const openclawBin = process.env.OPENCLAW_BIN || 'openclaw';
+    const { stderr } = await execFileAsync(WHISPER_CPP_PATH, [
+        '-m', WHISPER_MODEL_PATH,
+        '-f', filePath,
+        '--language', 'auto',
+        '--output-txt',
+        '--no-timestamps'
+    ], {
+        timeout: 600000, // 10 min max
+        maxBuffer: 50 * 1024 * 1024
+    });
 
-    const { stdout } = await execFileAsync(openclawBin, [
-        'agent', '--message', `Transcribe this audio file: ${filePath}`, '--json'
-    ], { timeout: 120000, env: { ...process.env } });
+    // whisper.cpp writes output to <filePath>.txt
+    const txtPath = filePath + '.txt';
+    if (await fs.pathExists(txtPath)) {
+        const transcript = (await fs.readFile(txtPath, 'utf-8')).trim();
+        await fs.remove(txtPath); // cleanup
+        if (transcript.length > 0) return transcript;
+    }
 
-    return stdout.trim();
+    throw new Error(`whisper.cpp produced no output. stderr: ${stderr?.slice(0, 500)}`);
 }
 
 /**
- * Summarize a transcript via OpenRouter (Gemini Flash — cheap)
+ * Summarize a transcript via local Ollama model (free, no API costs)
  */
-async function summarizeTranscript(transcript) {
-    if (!OPENROUTER_API_KEY) {
-        // Fallback: first 200 chars
-        return transcript.slice(0, 200) + '...';
-    }
-
+async function summarizeLocal(transcript) {
     try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        const response = await fetch(`${OLLAMA_URL}/api/generate`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://hydra.local',
-                'X-Title': 'HYDRA'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: 'google/gemini-2.0-flash-001',
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'Summarize the following audio transcript in 2-3 concise sentences. Focus on key topics, decisions, and action items.'
-                    },
-                    { role: 'user', content: transcript.slice(0, 8000) }
-                ],
-                max_tokens: 200
+                model: OLLAMA_MODEL,
+                prompt: `Summarize the following audio transcript in 2-3 concise sentences. Focus on key topics, decisions, and action items.\n\nTranscript:\n${transcript.slice(0, 8000)}`,
+                stream: false,
+                options: { num_predict: 256 }
             })
         });
 
-        if (!response.ok) return transcript.slice(0, 200) + '...';
+        if (!response.ok) {
+            console.warn(`[ingest-audio] Ollama returned ${response.status}, using fallback summary`);
+            return transcript.slice(0, 200) + '...';
+        }
+
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || transcript.slice(0, 200);
-    } catch {
+        return data.response?.trim() || transcript.slice(0, 200) + '...';
+    } catch (e) {
+        console.warn(`[ingest-audio] Ollama not available (${e.message}), using fallback summary`);
         return transcript.slice(0, 200) + '...';
     }
+}
+
+/**
+ * Check if a plaud-sync generated .md sidecar file exists alongside the audio.
+ * If it does, we can skip transcription + summarization and use the rich output.
+ */
+async function checkSidecarMarkdown(audioPath) {
+    const base = audioPath.replace(/\.[^.]+$/, '');
+    const mdPath = base + '.md';
+    if (await fs.pathExists(mdPath)) {
+        const content = await fs.readFile(mdPath, 'utf-8');
+        if (content.length > 50) {
+            console.log(`[ingest-audio] 📄 Found .md sidecar from plaud-sync`);
+            return { mdPath, content };
+        }
+    }
+    return null;
 }
 
 /**
@@ -153,23 +147,36 @@ async function processAudioFile(filePath) {
     }
 
     try {
-        // Check for existing Plaud Note transcript first
-        let transcript = await checkPlaudTranscript(filePath);
+        // Check for rich .md sidecar from plaud-sync.js first
+        const sidecar = await checkSidecarMarkdown(filePath);
 
-        if (!transcript) {
-            // Transcribe the audio
-            transcript = WHISPER_MODE === 'local'
-                ? await transcribeLocal(filePath)
-                : await transcribeViaAPI(filePath);
+        let transcript;
+        let summary;
+
+        if (sidecar) {
+            // plaud-sync already generated a rich Claude summary
+            // Extract transcript from sidecar or use the whole thing as summary
+            transcript = sidecar.content;
+            summary = sidecar.content.slice(0, 500);
+        } else {
+            // No sidecar — do local transcription + summarization
+            // Check for existing Plaud Note transcript first
+            transcript = await checkPlaudTranscript(filePath);
+
+            if (!transcript) {
+                // Transcribe the audio locally with whisper.cpp
+                transcript = await transcribeLocal(filePath);
+            }
+
+            if (!transcript || transcript.length < 10) {
+                console.warn(`[ingest-audio] ${filename}: empty transcript, skipping`);
+                return;
+            }
+
+            // Summarize via local Ollama
+            summary = await summarizeLocal(transcript);
         }
 
-        if (!transcript || transcript.length < 10) {
-            console.warn(`[ingest-audio] ${filename}: empty transcript, skipping`);
-            return;
-        }
-
-        // Summarize
-        const summary = await summarizeTranscript(transcript);
         const durationS = null; // Could be extracted with ffprobe if needed
 
         // Write to shared brain
@@ -179,12 +186,12 @@ async function processAudioFile(filePath) {
         await fs.ensureDir(PROCESSED_DIR);
         await fs.move(filePath, path.join(PROCESSED_DIR, filename), { overwrite: true });
 
-        // Also move any sidecar transcript files
+        // Also move any sidecar files (.md, .txt, .json, .srt)
         const base = filePath.replace(/\.[^.]+$/, '');
-        for (const ext of ['.txt', '.json', '.srt']) {
-            const sidecar = base + ext;
-            if (await fs.pathExists(sidecar)) {
-                await fs.move(sidecar, path.join(PROCESSED_DIR, path.basename(sidecar)), { overwrite: true });
+        for (const ext of ['.md', '.txt', '.json', '.srt']) {
+            const sidecarFile = base + ext;
+            if (await fs.pathExists(sidecarFile)) {
+                await fs.move(sidecarFile, path.join(PROCESSED_DIR, path.basename(sidecarFile)), { overwrite: true });
             }
         }
 
@@ -220,6 +227,8 @@ async function scan() {
 // ── Main Loop ─────────────────────────────────────────────────────────────────
 
 console.log(`[ingest-audio] Watching ${AUDIO_INBOX} (poll every ${POLL_INTERVAL / 1000}s)`);
-console.log(`[ingest-audio] Whisper mode: ${WHISPER_MODE}`);
+console.log(`[ingest-audio] Mode: local (whisper.cpp + Ollama ${OLLAMA_MODEL})`);
+console.log(`[ingest-audio] Whisper binary: ${WHISPER_CPP_PATH}`);
+console.log(`[ingest-audio] Whisper model: ${WHISPER_MODEL_PATH}`);
 scan();
 setInterval(scan, POLL_INTERVAL);
