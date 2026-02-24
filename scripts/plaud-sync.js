@@ -16,6 +16,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import Anthropic from '@anthropic-ai/sdk';
 import { google } from 'googleapis';
+import { detectTags, wrapWithFrontmatter } from './audio-tagger.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -325,7 +326,18 @@ async function processRecording(recording, processedIds) {
         }
 
         // 4. Summarize with Claude
-        const markdown = await summarizeWithClaude(transcript, recording.name || baseName);
+        let markdown = await summarizeWithClaude(transcript, recording.name || baseName);
+
+        // 4.5. Tag the file and add frontmatter
+        const todayStr = new Date().toISOString().split('T')[0];
+        const { tags, agents } = detectTags(transcript);
+        markdown = wrapWithFrontmatter(markdown, {
+            source: 'plaud-note',
+            file: mp3Name,
+            tags,
+            agents,
+            date: todayStr
+        });
 
         // 5. Upload .md to Google Drive
         const tempMdPath = path.join(TEMP_DIR, mdName);
@@ -417,6 +429,20 @@ console.log(`[plaud-sync] Drive folder: ${GOOGLE_DRIVE_FOLDER_ID || '(not config
 
 validateConfig();
 
-// Initial poll, then interval
-poll();
-setInterval(poll, POLL_INTERVAL);
+if (process.argv.includes('--test')) {
+    console.log('[plaud-sync] Running in --test mode. Checking API access...');
+    fetchPlaudRecordings().then(recs => {
+        console.log(`[plaud-sync] ✅ API connection successful. Found ${recs.length} recordings.`);
+        if (recs.length > 0) {
+            console.log(`[plaud-sync] Sample recording: ${recs[0].name || recs[0].id}`);
+        }
+        process.exit(0);
+    }).catch(err => {
+        console.error(`[plaud-sync] ❌ API connection failed: ${err.message}`);
+        process.exit(1);
+    });
+} else {
+    // Initial poll, then interval
+    poll();
+    setInterval(poll, POLL_INTERVAL);
+}
