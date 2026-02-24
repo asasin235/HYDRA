@@ -195,8 +195,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     
     else if (name === "hydra_paper_trade") {
       const { symbol, action, qty, price } = args;
-      addTrade(symbol, action, qty, price, 0); // initial PNL 0
-      return { content: [{ type: "text", text: `Trade executed: ${action.toUpperCase()} ${qty}x ${symbol} @ ₹${price}` }] };
+      const normalizedAction = String(action).toLowerCase();
+      if (normalizedAction !== "buy" && normalizedAction !== "sell") {
+        return {
+          content: [{
+            type: "text",
+            text: `Invalid action "${action}". Allowed actions are "buy" or "sell".`
+          }],
+          isError: true
+        };
+      }
+      addTrade(symbol, normalizedAction, qty, price, 0); // initial PNL 0
+      return {
+        content: [{
+          type: "text",
+          text: `Trade executed: ${normalizedAction.toUpperCase()} ${qty}x ${symbol} @ ₹${price}`
+        }]
+      };
     }
     
     else if (name === "hydra_portfolio") {
