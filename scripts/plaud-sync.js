@@ -242,8 +242,11 @@ async function summarizeWithClaude(transcript, recordingName) {
         .join('\n\n');
 
     // Wrap with metadata header
+    const safeTitle = String(recordingName)
+        .replace(/"/g, '\\"')
+        .replace(/\r?\n/g, ' ');
     const header = `---
-title: "${recordingName}"
+title: "${safeTitle}"
 date: "${new Date().toISOString()}"
 source: plaud-sync
 model: ${CLAUDE_MODEL}
