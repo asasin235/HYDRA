@@ -19,7 +19,7 @@ import { searchContext, writeContext } from "../core/openclaw-memory.js";
 import { getMonthlySpend, isOpen, isPaused } from "../core/bottleneck.js";
 import { ACTIVE_AGENT_NAMES } from "../core/registry.js";
 
-const HA_URL = process.env.HOME_ASSISTANT_URL || 'http://192.168.68.124:8123';
+const HA_URL = process.env.HOME_ASSISTANT_URL || 'http://localhost:8123';
 const HA_TOKEN = process.env.HOME_ASSISTANT_TOKEN || '';
 
 function haHeaders() {
