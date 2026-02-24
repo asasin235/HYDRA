@@ -18,6 +18,7 @@ module.exports = {
     script('ingest-audio', './scripts/ingest-audio.js'),
     script('plaud-sync', './scripts/plaud-sync.js'),
     script('screenpipe-sync', './scripts/screenpipe-sync.js'),
+    script('hydra-mcp', './mcp/hydra-mcp-server.js'),
   ],
   // Custom groups for convenience
   deploy: {},
