@@ -168,12 +168,12 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 - Bearer token authentication for inter-service API calls
 - Express middleware (`validateRequest`) and authenticated fetch (`signedFetch`)
 
-### `mcp/hydra-mcp-server.js` 🚧 Sprint 2
+### `mcp/hydra-mcp-server.js`
 
 - **MCP server** built on `@modelcontextprotocol/sdk` exposing 8 HYDRA tools to OpenClaw's agent
 - Register once: `openclaw mcp add --name hydra --command "node /Users/aakif/HYDRA/mcp/hydra-mcp-server.js"`
 - Tools: `hydra_home_control`, `hydra_read_sensors`, `hydra_paper_trade`, `hydra_portfolio`, `hydra_debt_status`, `hydra_search_brain`, `hydra_write_context`, `hydra_agent_status`
-- Runs as a PM2 process for always-on availability
+- Runs as a standard stdio process invoked by OpenClaw directly
 
 ### `tests/` 🚧 Sprint 2
 
@@ -235,7 +235,7 @@ HYDRA/
 │   ├── openclaw-memory.js     # Shared brain (OpenClaw memory bridge)
 │   ├── registry.js            # Centralized agent config registry
 │   └── validate-env.js        # Per-agent env var validation
-├── mcp/                       # 🚧 Sprint 2 — MCP server
+├── mcp/                       # MCP server
 │   ├── hydra-mcp-server.js    # MCP stdio server exposing 8 HYDRA tools to OpenClaw
 │   └── package.json
 ├── tests/                     # 🚧 Sprint 2 — Vitest unit tests
@@ -500,9 +500,9 @@ Key notes:
 - Incoming: OpenClaw forwards messages to SocialBot's webhook at `http://127.0.0.1:3004/social/incoming`
 - CLI calls include **retry logic** (2 attempts) and a **60-second gateway availability cache**
 
-### MCP Server (Sprint 2 🚧)
+### MCP Server
 
-Once `mcp/hydra-mcp-server.js` is built, register it with OpenClaw once:
+Register `mcp/hydra-mcp-server.js` with OpenClaw once:
 
 ```bash
 openclaw mcp add --name hydra --command "node /Users/aakif/HYDRA/mcp/hydra-mcp-server.js"
@@ -632,7 +632,7 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 ### 🚧 Sprint 2 — Tests, MCP, Audio
 
 - [ ] Vitest unit tests for all core modules
-- [ ] HYDRA MCP server (`mcp/hydra-mcp-server.js`) — 8 tools for OpenClaw
+- [x] HYDRA MCP server (`mcp/hydra-mcp-server.js`) — 8 tools for OpenClaw
 - [x] Plaud API → whisper.cpp → Claude → Google Drive pipeline (`plaud-sync.js`)
 - [x] Local-only ingest-audio (whisper.cpp + Ollama, no OpenRouter)
 - [x] whisper.cpp setup script with Apple Silicon Metal support
@@ -663,7 +663,7 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 | Home Automation | Home Assistant REST API                                                             |
 | Market Research | Perplexity API (Sonar)                                                              |
 | Messaging       | OpenClaw Gateway (WhatsApp, iMessage, Discord, Telegram)                            |
-| MCP Server      | @modelcontextprotocol/sdk (🚧 Sprint 2)                                             |
+| MCP Server      | @modelcontextprotocol/sdk + stdio transport                                         |
 | Transcription   | whisper.cpp local (Apple Silicon Metal GPU)                                         |
 | Plaud Sync      | Plaud REST API → Claude Sonnet → Google Drive                                       |
 | Local Summary   | Ollama (gemma3:4b) for offline summarization in ingest-audio                        |

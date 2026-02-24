@@ -18,6 +18,8 @@ module.exports = {
     script('ingest-audio', './scripts/ingest-audio.js'),
     script('plaud-sync', './scripts/plaud-sync.js'),
     script('screenpipe-sync', './scripts/screenpipe-sync.js'),
+    // NOTE: hydra-mcp is NOT managed by PM2. It uses stdio transport and is
+    // spawned on-demand by OpenClaw via: openclaw mcp add --name hydra --command "node mcp/hydra-mcp-server.js"
   ],
   // Custom groups for convenience
   deploy: {},

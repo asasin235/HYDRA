@@ -21,7 +21,7 @@ WhatsApp / iMessage / Discord / Telegram
                 │
     ┌───────────┼──────────────────┐
     ▼           ▼                  ▼
-Incoming    Outgoing msgs     MCP Tools 🚧Sprint2
+Incoming    Outgoing msgs     MCP Tools
 msgs        (openclaw CLI)    (HYDRA MCP server)
     │           │                  │
     ▼           ▼                  ▼
@@ -444,7 +444,7 @@ For more details, see:
 
 ---
 
-## Part 7: HYDRA MCP Server 🚧 Sprint 2
+## Part 7: HYDRA MCP Server
 
 HYDRA exposes its agent capabilities as a **Model Context Protocol (MCP) server**, allowing OpenClaw's agent to invoke HYDRA tools via natural language.
 
