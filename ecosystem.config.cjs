@@ -19,6 +19,7 @@ module.exports = {
     script('plaud-sync', './scripts/plaud-sync.js'),
     script('screenpipe-sync', './scripts/screenpipe-sync.js'),
     script('ingest-context', './scripts/ingest-context.js'),
+    script('dashboard', './scripts/dashboard.js'),
     {
       name: 'backup',
       script: './scripts/backup-gdrive.sh',
