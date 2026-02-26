@@ -5,7 +5,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import Agent from '../core/agent.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
-import { getDebt, getState, setState } from '../core/db.js';
+import { getDebt, getState, setState, getTransactions, getDailySpend, getSpendByCategory, getRecentTransactions } from '../core/db.js';
 import { appendBrain } from '../core/filesystem.js';
 import { AGENTS } from '../core/registry.js';
 
@@ -183,9 +183,73 @@ const EDMOBOT_TOOLS = [
   }
 ];
 
+// CFO bot tools — query transactions DB populated by sms-reader.js
+const CFOBOT_TOOLS = [
+  {
+    name: 'get_recent_transactions',
+    description: 'Get the most recent bank transactions (debits and credits) from SMS. Returns up to 30 transactions with amount, merchant, bank, category, and date.',
+    parameters: { type: 'object', properties: { limit: { type: 'number', description: 'Max transactions to return (default 20)' } }, required: [] },
+    execute: async ({ limit }) => {
+      const txs = getRecentTransactions(limit || 20);
+      if (txs.length === 0) return 'No transactions found in the database.';
+      const lines = txs.map(t => `${t.type === 'debit' ? '🔴 SPENT' : '🟢 RECEIVED'} ₹${t.amount} | ${t.bank} | ${t.merchant || 'N/A'} | ${t.category} | ${t.date}`);
+      return `${txs.length} transactions:\n${lines.join('\n')}`;
+    }
+  },
+  {
+    name: 'get_spending_by_category',
+    description: 'Get total spending broken down by category (food, transport, shopping, utilities, etc.) for a date range.',
+    parameters: { type: 'object', properties: { from_date: { type: 'string', description: 'Start date YYYY-MM-DD' }, to_date: { type: 'string', description: 'End date YYYY-MM-DD' } }, required: ['from_date', 'to_date'] },
+    execute: async ({ from_date, to_date }) => {
+      const cats = getSpendByCategory(from_date, to_date);
+      if (cats.length === 0) return `No spending data found between ${from_date} and ${to_date}.`;
+      const total = cats.reduce((s, c) => s + c.total, 0);
+      const lines = cats.map(c => `${c.category}: ₹${c.total.toFixed(0)} (${c.count} txns)`);
+      return `Spending ${from_date} to ${to_date}:\nTotal: ₹${total.toFixed(0)}\n${lines.join('\n')}`;
+    }
+  },
+  {
+    name: 'get_daily_spending',
+    description: 'Get day-by-day spending breakdown with categories for a date range.',
+    parameters: { type: 'object', properties: { from_date: { type: 'string', description: 'Start date YYYY-MM-DD' }, to_date: { type: 'string', description: 'End date YYYY-MM-DD' } }, required: ['from_date', 'to_date'] },
+    execute: async ({ from_date, to_date }) => {
+      const daily = getDailySpend(from_date, to_date);
+      if (daily.length === 0) return `No spending data found between ${from_date} and ${to_date}.`;
+      const lines = daily.map(d => `${d.date} | ${d.category}: ₹${d.total.toFixed(0)} (${d.count} txns)`);
+      return `Daily spending ${from_date} to ${to_date}:\n${lines.join('\n')}`;
+    }
+  },
+  {
+    name: 'get_transactions_by_date',
+    description: 'Get all transactions (debits and credits) in a specific date range with full details.',
+    parameters: { type: 'object', properties: { from_date: { type: 'string', description: 'Start date YYYY-MM-DD' }, to_date: { type: 'string', description: 'End date YYYY-MM-DD' } }, required: ['from_date', 'to_date'] },
+    execute: async ({ from_date, to_date }) => {
+      const txs = getTransactions(from_date, to_date);
+      if (txs.length === 0) return `No transactions found between ${from_date} and ${to_date}.`;
+      const debits = txs.filter(t => t.type === 'debit');
+      const credits = txs.filter(t => t.type === 'credit');
+      const totalDebit = debits.reduce((s, t) => s + t.amount, 0);
+      const totalCredit = credits.reduce((s, t) => s + t.amount, 0);
+      const lines = txs.map(t => `${t.type === 'debit' ? '🔴' : '🟢'} ₹${t.amount} | ${t.bank} | ${t.merchant || 'N/A'} | ${t.category} | ${t.date} | card:${t.card || '-'}`);
+      return `Transactions ${from_date} to ${to_date}:\nDebits: ₹${totalDebit.toFixed(0)} (${debits.length}) | Credits: ₹${totalCredit.toFixed(0)} (${credits.length})\n${lines.join('\n')}`;
+    }
+  },
+  {
+    name: 'get_debt_status',
+    description: 'Get current debt tracker status including total debt, amount paid, and wedding fund balance.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      const d = getDebt();
+      if (!d) return 'Debt tracker not initialized.';
+      return `Debt: ₹${(d.debt || 0).toFixed(0)} | Paid: ₹${(d.paid || 0).toFixed(0)} | Wedding Fund: ₹${(d.wedding_fund || 0).toFixed(0)} | Updated: ${d.updated_at || 'N/A'}`;
+    }
+  }
+];
+
 // Tool map for agents that need tools when created by the gateway
 const AGENT_TOOLS = {
-  '01-edmobot': EDMOBOT_TOOLS
+  '01-edmobot': EDMOBOT_TOOLS,
+  '06-cfobot': CFOBOT_TOOLS
 };
 
 async function getOrCreateAgent(name) {
