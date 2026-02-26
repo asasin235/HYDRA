@@ -5,7 +5,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import Agent from '../core/agent.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
-import { getDebt } from '../core/db.js';
+import { getDebt, getState, setState } from '../core/db.js';
 import { appendBrain } from '../core/filesystem.js';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
@@ -276,7 +276,19 @@ app.action('reflect_skip', async ({ body, ack, say }) => {
   await ack();
   const value = body.actions?.[0]?.value || '';
   const [agentName, weekNum] = value.split('|');
-  await say({ text: `⏭ Skipped reflection for ${agentName} week ${weekNum}.` });
+
+  // Record rejection so auditor doesn't re-propose the same change
+  try {
+    const existing = getState(agentName, 'rejected_suggestions');
+    const rejected = existing ? JSON.parse(existing) : [];
+    rejected.push(`Week ${weekNum}: suggestion skipped by user`);
+    while (rejected.length > 10) rejected.shift();
+    setState(agentName, 'rejected_suggestions', JSON.stringify(rejected));
+  } catch (e) {
+    console.error('[slack-gateway] rejection tracking error:', e.message);
+  }
+
+  await say({ text: `⏭ Skipped reflection for ${agentName} week ${weekNum}. Recorded for future context.` });
 });
 
 // SabihaBot message draft actions

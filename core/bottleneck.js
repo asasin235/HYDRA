@@ -309,7 +309,7 @@ export async function getTodaySpend(agentName) {
     const usage = await loadUsage();
     const dateKey = getDateKey();
     
-    const agentData = usage.agents[agentName];
+    const agentData = usage.agents[agentName] || {};
     if (!agentData?.daily?.[dateKey]) {
       return { tokens: 0, cost: 0 };
     }
@@ -388,5 +388,36 @@ export async function isPaused(agentName) {
     return paused[agentName]?.PAUSED === true;
   } catch (error) {
     return false;
+  }
+}
+
+/**
+ * Get past 7 days of spend for an agent (for weekly reflections).
+ * @param {string} agentName - Agent identifier
+ * @returns {Promise<{totalTokens: number, totalCost: number, dailyBreakdown: object[]}>}
+ */
+export async function getWeeklySpend(agentName) {
+  try {
+    const usage = await loadUsage();
+    const agentData = usage.agents[agentName] || {};
+
+    const now = new Date();
+    const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    let totalTokens = 0, totalCost = 0;
+    const dailyBreakdown = [];
+
+    for (const [dateKey, stats] of Object.entries(agentData.daily)) {
+      if (new Date(dateKey) >= sevenDaysAgo) {
+        totalTokens += stats.tokens || 0;
+        totalCost += stats.cost || 0;
+        dailyBreakdown.push({ date: dateKey, tokens: stats.tokens, cost: stats.cost });
+      }
+    }
+
+    dailyBreakdown.sort((a, b) => a.date.localeCompare(b.date));
+    return { totalTokens, totalCost, dailyBreakdown };
+  } catch (error) {
+    console.error('[bottleneck] getWeeklySpend error:', error.message);
+    return { totalTokens: 0, totalCost: 0, dailyBreakdown: [] };
   }
 }
