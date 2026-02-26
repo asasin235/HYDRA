@@ -12,7 +12,7 @@ const SLACK_CHANNEL = '#05-jarvis';
 
 const jarvis = new Agent({
   name: '05-jarvis',
-  model: 'google/gemini-flash-3',
+  model: 'mistralai/mistral-small-3.2-24b-instruct',
   systemPromptPath: 'prompts/05-jarvis.txt',
   tools: [],
   namespace: '05_JARVIS',

@@ -1,17 +1,17 @@
 /**
- * core/openclaw.js — Shared OpenClaw Gateway client
- * Uses the OpenClaw CLI (`openclaw message send`, etc.) to communicate
- * with the running OpenClaw gateway daemon.
+ * core/openclaw.js — OpenClaw Gateway client (DEPRECATED for messaging)
  *
- * Improvements over previous version:
- *   - Retry logic (2 attempts) for transient CLI failures
- *   - Gateway availability caching (60s TTL) to avoid spamming `openclaw health`
- *   - Full CLI args included in error logs for easier debugging
+ * ⚠️  MESSAGING IS NOW HANDLED BY HERMES AGENT (core/hermes-bridge.js)
+ *     sendMessage, sendWhatsApp, sendTelegram, sendDiscord, getMessages
+ *     all redirect to hermes-bridge.js.
  *
- * Usage:
- *   import { sendMessage, sendWhatsApp, sendDiscord } from '../core/openclaw.js';
- *   await sendWhatsApp('+919876543210', 'goodnight ❤️');
- *   await sendMessage('discord', '#general', 'deploy complete');
+ * OpenClaw is retained ONLY for:
+ *   - Gateway health checks (getGatewayStatus, isGatewayAvailable)
+ *   - Channel status checks (getChannelStatus)
+ *   - MCP tool connectivity
+ *   - LanceDB / openclaw-memory integration
+ *
+ * Do NOT add new messaging calls here.
  */
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -110,9 +110,9 @@ export async function sendMessage(channel, to, message, options = {}) {
   const args = ['message', 'send', '--channel', channel, '--target', to, '--message', message];
 
   if (options.replyTo) args.push('--reply-to', options.replyTo);
-  if (options.media)   args.push('--media', options.media);
-  if (options.silent)  args.push('--silent');
-  if (options.dryRun)  args.push('--dry-run');
+  if (options.media) args.push('--media', options.media);
+  if (options.silent) args.push('--silent');
+  if (options.dryRun) args.push('--dry-run');
 
   const result = await runCli(args);
   if (!result.ok) {
@@ -154,7 +154,7 @@ export async function sendTelegram(to, message, options = {}) {
  */
 export async function getGatewayStatus(forceRefresh = false) {
   if (!forceRefresh && isCacheValid()) {
-    return { online: _gatewayCache.online, cached: true };
+    return { online: _gatewayCache.online };
   }
 
   const result = await runCli(['health'], 5000, 1); // no retry on health checks

@@ -14,6 +14,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { AGENT_NAMESPACES } from './registry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -86,9 +87,8 @@ export async function writeScreenActivity(source, summary, apps = []) {
  */
 export async function writeAudioTranscript(source, filename, transcript, summary, durationS, metadata = {}) {
     await ensureDirs();
-    const file = path.join(AUDIO_DIR, `${today()}.md`);
     const duration = durationS ? ` (${Math.round(durationS / 60)}min)` : '';
-    
+
     let tagLine = '';
     if (metadata.tags?.length || metadata.agents?.length) {
         tagLine = `\n**Tags:** [${metadata.tags?.join(', ') || ''}] | **Agents:** [${metadata.agents?.join(', ') || ''}]\n`;
@@ -96,8 +96,29 @@ export async function writeAudioTranscript(source, filename, transcript, summary
 
     const entry = `\n## ${timeNow()} — ${source}: ${filename}${duration}${tagLine}\n**Summary:** ${summary}\n\n<details>\n<summary>Full transcript</summary>\n\n${transcript}\n\n</details>\n`;
 
-    await fs.appendFile(file, entry, 'utf-8');
-    console.log(`[openclaw-memory] Audio transcript written → ${file}`);
+    // Determine target directories based on routing
+    let targetDirs = [];
+    if (metadata.agents && metadata.agents.length > 0) {
+        for (const agent of metadata.agents) {
+            const ns = AGENT_NAMESPACES[agent];
+            if (ns) {
+                targetDirs.push(path.join(BRAIN_PATH, 'brain', ns, 'audio'));
+            }
+        }
+    }
+
+    // Fallback to shared context if no valid agent routing
+    if (targetDirs.length === 0) {
+        targetDirs.push(AUDIO_DIR);
+    }
+
+    // Write to all routed directories
+    for (const d of new Set(targetDirs)) { // use Set to dedupe
+        await fs.ensureDir(d);
+        const file = path.join(d, `${today()}.md`);
+        await fs.appendFile(file, entry, 'utf-8');
+        console.log(`[openclaw-memory] Audio transcript written → ${file}`);
+    }
 }
 
 /**

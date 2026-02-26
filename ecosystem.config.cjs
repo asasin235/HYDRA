@@ -18,8 +18,25 @@ module.exports = {
     script('ingest-audio', './scripts/ingest-audio.js'),
     script('plaud-sync', './scripts/plaud-sync.js'),
     script('screenpipe-sync', './scripts/screenpipe-sync.js'),
+    script('ingest-context', './scripts/ingest-context.js'),
+    {
+      name: 'backup',
+      script: './scripts/backup-gdrive.sh',
+      cron_restart: '0 2 * * *', // Run at 2 AM daily
+      autorestart: false,
+      error_file: './logs/backup.log',
+      out_file: './logs/backup.log',
+      time: true
+    },
     // NOTE: hydra-mcp is NOT managed by PM2. It uses stdio transport and is
     // spawned on-demand by OpenClaw via: openclaw mcp add --name hydra --command "node mcp/hydra-mcp-server.js"
+    //
+    // NOTE: Hermes Agent Gateway is managed independently (not PM2):
+    //   hermes gateway install   → installs as macOS launchd service
+    //   hermes gateway start     → start
+    //   hermes gateway stop      → stop
+    //   hermes gateway status    → check
+    // Hermes handles: WhatsApp, Telegram, Discord, Slack bridges
   ],
   // Custom groups for convenience
   deploy: {},
@@ -33,8 +50,10 @@ function app(name) {
     exec_mode: 'fork',
     autorestart: true,
     max_memory_restart: '512M',
+    node_args: '--require dotenv/config',
     env: {
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      DOTENV_CONFIG_PATH: './.env'
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,
@@ -49,8 +68,10 @@ function script(name, scriptPath) {
     exec_mode: 'fork',
     autorestart: true,
     max_memory_restart: '256M',
+    node_args: '--require dotenv/config',
     env: {
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      DOTENV_CONFIG_PATH: './.env'
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,

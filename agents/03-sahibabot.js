@@ -10,6 +10,7 @@ import path from 'path';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { writeBrain, readBrain } from '../core/filesystem.js';
+import { getMessages } from '../core/hermes-bridge.js';
 
 validateEnv('03-sahibabot');
 
@@ -22,7 +23,7 @@ const MEMORIES_DIR = path.join(SAHIBA_DIR, 'memories');
 // Tier 1: Mistral for lightweight nudges
 const sahibaTier1 = new Agent({
   name: '03-sahibabot',
-  model: 'mistral/mistral-small-latest',
+  model: 'mistralai/mistral-small-3.2-24b-instruct',
   systemPromptPath: 'prompts/03-sahibabot.txt',
   tools: [],
   namespace: '03_SAHIBA',
@@ -73,7 +74,7 @@ async function readRelationshipContext() {
       try {
         const content = await fs.readFile(path.join(MEMORIES_DIR, f), 'utf-8');
         memorySnippets.push(content.slice(0, 300));
-      } catch {}
+      } catch { }
     }
 
     // Health score: 1-10 based on last contact age and upcoming events
@@ -139,7 +140,7 @@ async function draftMessage(context) {
         try {
           const content = await fs.readFile(path.join(MEMORIES_DIR, f), 'utf-8');
           if (/sabiha/i.test(content)) memories.push(content.slice(0, 400));
-        } catch {}
+        } catch { }
       }
     }
 
@@ -167,6 +168,31 @@ Output ONLY the message text, nothing else.`;
 }
 
 // ── Cron Jobs ─────────────────────────────────────────────────────────────────
+
+// Hourly check for new WhatsApp messages
+cron.schedule('0 * * * *', async () => {
+  try {
+    const messages = await getMessages('whatsapp', 'Sabiha', 5);
+    if (messages && messages.length > 0) {
+      const latest = messages[messages.length - 1];
+      const lastContactFile = path.join(SAHIBA_DIR, 'last_contact.json');
+      let currentLastContact = {};
+      if (await fs.pathExists(lastContactFile)) {
+        currentLastContact = await fs.readJson(lastContactFile);
+      }
+
+      const latestTs = new Date(latest.timestamp).getTime();
+      const currentTs = currentLastContact.timestamp ? new Date(currentLastContact.timestamp).getTime() : 0;
+
+      if (latestTs > currentTs) {
+        await fs.writeJson(lastContactFile, { timestamp: latest.timestamp, lastMessage: latest.text, from: latest.from }, { spaces: 2 });
+        console.log(`[03-sahibabot] Updated last contact to ${latest.timestamp}`);
+      }
+    }
+  } catch (e) {
+    console.error('[03-sahibabot] WhatsApp sync failed:', e.message);
+  }
+});
 
 // 4PM daily: nudge if last contact > 18 hours
 cron.schedule('0 16 * * *', async () => {

@@ -33,6 +33,15 @@ const app = new App({
   socketMode: true
 });
 
+// Raw event logger — helps debug what events arrive from Slack
+app.use(async ({ payload, next }) => {
+  const type = payload?.type || payload?.event?.type || 'unknown';
+  if (type !== 'unknown') {
+    console.log(`[slack-gateway] event: ${type}`);
+  }
+  await next();
+});
+
 // Lazy agent registry
 const agentRegistry = new Map();
 
@@ -60,11 +69,14 @@ async function logDrop(entry) {
 
 function getOrCreateAgent(name) {
   if (agentRegistry.has(name)) return agentRegistry.get(name);
-  // Sensible defaults; individual agents can be specialized later
+  // Try .txt first (existing prompts), fall back to .md
+  const promptTxt = path.join('prompts', `${name}.txt`);
+  const promptMd = path.join('prompts', `${name}.md`);
+  const systemPromptPath = existsSync(promptTxt) ? promptTxt : promptMd;
   const agent = new Agent({
     name,
-    model: 'anthropic/claude-sonnet-4',
-    systemPromptPath: path.join('prompts', `${name}.md`),
+    model: 'anthropic/claude-sonnet-4.6',
+    systemPromptPath,
     tools: [],
     namespace: name,
     tokenBudget: 8000
@@ -85,64 +97,88 @@ async function writePendingAction(agentName, approved) {
   }
 }
 
-// Message router: "@hydra [agent] [message]"
+// Core dispatch: handles routing, dedup, rate-limiting, and LLM call.
+// agentName defaults to '00-architect' when not explicitly specified.
+async function dispatch({ message, say, agentName = '00-architect', userText }) {
+  const channelId = message.channel || '';
+  const evtId = `${channelId}:${message.ts}`;
+  if (processed.has(evtId)) {
+    await logDrop({ reason: 'duplicate', evtId, user: message.user, text: message.text });
+    return;
+  }
+  remember(evtId);
+
+  const user = message.user;
+  const now = Date.now();
+  if (now - (lastByUser.get(user) || 0) < 3000) {
+    await say({ thread_ts: message.ts, text: 'Please wait before sending another command.' });
+    await logDrop({ reason: 'rate_limited', evtId, user, text: message.text });
+    return;
+  }
+  lastByUser.set(user, now);
+
+  const agent = getOrCreateAgent(agentName);
+  await say({ thread_ts: message.ts, text: `🤖 *${agentName}* is thinking...` });
+
+  const runPromise = agent.run(userText, `Slack user: <@${user}>`);
+  const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('TIMEOUT'), 30000));
+  const race = await Promise.race([runPromise, timeoutPromise]);
+
+  if (race === 'TIMEOUT') {
+    await say({ thread_ts: message.ts, text: `⏳ ${agentName} is still processing...` });
+    try {
+      const response = await runPromise;
+      await say({ thread_ts: message.ts, text: `*${agentName}:* ${response}` });
+    } catch (e) {
+      console.error('[slack-gateway] delayed run error:', e.message);
+    }
+  } else {
+    await say({ thread_ts: message.ts, text: `*${agentName}:* ${race}` });
+  }
+}
+
+// Message router: "hydra <agent> <message>" — explicit agent targeting
 app.message(/^\s*@?hydra\s+(\S+)\s+([\s\S]+)/i, async ({ message, say, context }) => {
   try {
-    // Verify channel name begins with hydra-
-    const channel = context?.channelName || '';
-    if (!channel.startsWith('hydra-')) return;
-
-    const evtId = `${message.channel}:${message.ts}`;
-    if (processed.has(evtId)) {
-      // duplicate delivery
-      await logDrop({ reason: 'duplicate', evtId, user: message.user, text: message.text });
-      return;
-    }
-    remember(evtId);
-
-    const user = message.user;
-    const now = Date.now();
-    const last = lastByUser.get(user) || 0;
-    if (now - last < 3000) {
-      await say({ thread_ts: message.ts, text: 'Please wait before sending another command' });
-      await logDrop({ reason: 'rate_limited', evtId, user, text: message.text });
-      return;
-    }
-    lastByUser.set(user, now);
-
     const agentName = context.matches[1].trim();
     const userText = context.matches[2].trim();
-
-    const agent = getOrCreateAgent(agentName);
-
-    await say({
-      thread_ts: message.ts,
-      text: `🤖 ${agentName} is thinking...`
-    });
-
-    // Timeout after 30s with a notice, but continue processing
-    const runPromise = agent.run(userText, `Slack user: <@${user}> in #${channel}`);
-    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('TIMEOUT'), 30000));
-    const race = await Promise.race([runPromise, timeoutPromise]);
-
-    if (race === 'TIMEOUT') {
-      await say({ thread_ts: message.ts, text: `Agent ${agentName} is processing... check #${channel} for response` });
-      // When finished, post the actual response
-      try {
-        const response = await runPromise;
-        await say({ thread_ts: message.ts, text: `*${agentName}:* ${response}` });
-      } catch (e) {
-        console.error('[slack-gateway] delayed run error:', e.message);
-      }
-    } else {
-      await say({ thread_ts: message.ts, text: `*${agentName}:* ${race}` });
-    }
+    await dispatch({ message, say, agentName, userText });
   } catch (error) {
     console.error('[slack-gateway] message handler error:', error.message);
-    await say({
-      thread_ts: message.ts,
-      text: `Error: ${error.message}`
-    });
+    await say({ thread_ts: message.ts, text: `❌ Error: ${error.message}` });
+  }
+});
+
+// Mention handler: "@HYDRA_BOT <message>" in any channel — routes to 00-architect
+app.event('app_mention', async ({ event, say }) => {
+  try {
+    // Strip the bot mention prefix (<@UXXXXX>) from the text
+    const userText = (event.text || '').replace(/<@[A-Z0-9]+>/g, '').trim();
+    if (!userText) {
+      await say({ thread_ts: event.ts, text: '👋 Hi! Send me a message like `@hydra how are you?` or DM me directly.' });
+      return;
+    }
+    await dispatch({ message: event, say, agentName: '00-architect', userText });
+  } catch (error) {
+    console.error('[slack-gateway] app_mention error:', error.message);
+    await say({ thread_ts: event.ts, text: `❌ Error: ${error.message}` });
+  }
+});
+
+// DM handler: direct messages to the bot → 00-architect
+app.message(async ({ message, say }) => {
+  // Only handle DMs (channel_type === 'im') and ignore bot messages / subtypes
+  if (message.channel_type !== 'im' || message.subtype || message.bot_id) return;
+  // Skip if already handled by the regex route above
+  if (/^\s*@?hydra\s+\S+\s+/i.test(message.text || '')) return;
+
+  try {
+    const userText = (message.text || '').trim();
+    if (!userText) return;
+    await dispatch({ message, say, agentName: '00-architect', userText });
+  } catch (error) {
+    console.error('[slack-gateway] DM handler error:', error.message);
+    await say({ thread_ts: message.ts, text: `❌ Error: ${error.message}` });
   }
 });
 
@@ -212,7 +248,7 @@ async function applyReflectionChanges(agentName, weekNum) {
   if (runningAgent) {
     await runningAgent.reloadPrompt();
   } else {
-    try { execSync(`pm2 restart ${agentName} --no-color 2>/dev/null || true`, { timeout: 5000 }); } catch {}
+    try { execSync(`pm2 restart ${agentName} --no-color 2>/dev/null || true`, { timeout: 5000 }); } catch { }
   }
 
   return { applied, total: changes.length };
@@ -324,6 +360,41 @@ app.action('social_discard', async ({ body, ack, say }) => {
   }
 });
 
+// Jira ticket actions (01-edmobot)
+app.action('jira_approve', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const draftId = body.actions?.[0]?.value || '';
+    if (!draftId) {
+      await say({ text: '❌ No draft ID found.' });
+      return;
+    }
+    const { executeJiraDraft } = await import('./01-edmobot.js');
+    const result = await executeJiraDraft(draftId);
+    if (result && result.key) {
+      await say({ text: `✅ Jira issue created: <https://your-domain.atlassian.net/browse/${result.key}|${result.key}>` });
+    } else {
+      await say({ text: `✅ Jira issue created.` });
+    }
+  } catch (e) {
+    console.error('[slack-gateway] jira_approve error:', e.message);
+    await say({ text: `❌ Failed to create Jira issue: ${e.message}` });
+  }
+});
+
+app.action('jira_discard', async ({ body, ack, say }) => {
+  await ack();
+  try {
+    const draftId = body.actions?.[0]?.value || '';
+    const { discardJiraDraft } = await import('./01-edmobot.js');
+    await discardJiraDraft(draftId);
+    await say({ text: '🗑️ Jira draft discarded.' });
+  } catch (e) {
+    console.error('[slack-gateway] jira_discard error:', e.message);
+    await say({ text: `❌ Error: ${e.message}` });
+  }
+});
+
 // /hydra-status command
 app.command('/hydra-status', async ({ ack, respond }) => {
   await ack();
@@ -344,7 +415,7 @@ app.command('/hydra-status', async ({ ack, respond }) => {
 
     // Token spend today for known agents in ecosystem
     const agentNames = [
-      '00-architect','01-edmobot','02-brandbot','03-sahibabot','04-socialbot','05-jarvis','06-cfobot','07-biobot','09-wolf','10-mercenary','11-auditor','99-slack-gateway'
+      '00-architect', '01-edmobot', '02-brandbot', '03-sahibabot', '04-socialbot', '05-jarvis', '06-cfobot', '07-biobot', '09-wolf', '10-mercenary', '11-auditor', '99-slack-gateway'
     ];
     const today = await Promise.all(agentNames.map(async n => ({ name: n, ...(await getTodaySpend(n)) })));
     const todayTotal = today.reduce((sum, a) => sum + (a.cost || 0), 0);

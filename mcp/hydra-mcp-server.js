@@ -18,6 +18,7 @@ import { db, addTrade, getTrades, getDebt } from "../core/db.js";
 import { searchContext, writeContext } from "../core/openclaw-memory.js";
 import { getMonthlySpend, isOpen, isPaused } from "../core/bottleneck.js";
 import { ACTIVE_AGENT_NAMES } from "../core/registry.js";
+import { getMessages } from "../core/hermes-bridge.js";
 
 const HA_URL = process.env.HOME_ASSISTANT_URL || 'http://localhost:8123';
 const HA_TOKEN = process.env.HOME_ASSISTANT_TOKEN || '';
@@ -27,9 +28,9 @@ function haHeaders() {
 }
 
 const DEVICE_MAP = {
-  ac:             { domain: 'climate',    entityId: process.env.HA_AC_ENTITY || 'climate.living_room_ac' },
-  bedroom_lights: { domain: 'light',      entityId: process.env.HA_BEDROOM_LIGHTS || 'light.bedroom' },
-  desk_lamp:      { domain: 'light',      entityId: process.env.HA_DESK_LAMP || 'light.desk_lamp' }
+  ac: { domain: 'climate', entityId: process.env.HA_AC_ENTITY || 'climate.living_room_ac' },
+  bedroom_lights: { domain: 'light', entityId: process.env.HA_BEDROOM_LIGHTS || 'light.bedroom' },
+  desk_lamp: { domain: 'light', entityId: process.env.HA_DESK_LAMP || 'light.desk_lamp' }
 };
 
 const server = new Server({
@@ -133,6 +134,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
           required: []
         }
+      },
+      {
+        name: "hydra_read_messages",
+        description: "Read recent messages from a specific channel and contact via OpenClaw Gateway.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            channel: { type: "string", description: "Channel name (e.g., 'whatsapp', 'telegram', 'imessage', 'discord')" },
+            contact: { type: "string", description: "Contact phone number, chat ID, or target name" },
+            limit: { type: "number", description: "Number of recent messages to retrieve (max 50, default 10)" }
+          },
+          required: ["channel", "contact"]
+        }
       }
     ]
   };
@@ -140,13 +154,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
-  
+
   try {
     if (name === "hydra_home_control") {
       const { device, action, value } = args;
       const d = DEVICE_MAP[device];
       if (!d) return { toolResult: `Unknown device: ${device}` };
-      
+
       let service, payload;
       if (d.domain === 'climate') {
         if (action === 'set_temperature') {
@@ -168,20 +182,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           payload = { entity_id: d.entityId };
         }
       }
-      
+
       await axios.post(`${HA_URL}/api/services/${d.domain}/${service}`, payload, { headers: haHeaders() });
       const resultMsg = `OK: ${device} → ${action}${value !== undefined ? ` (${value})` : ''}`;
       return { content: [{ type: "text", text: resultMsg }] };
     }
-    
+
     else if (name === "hydra_read_sensors") {
       const res = await axios.get(`${HA_URL}/api/states`, { headers: haHeaders() });
       const states = res.data;
       const relevant = {};
       const ENTITIES = [
         process.env.HA_MOTION_SENSOR || 'binary_sensor.aqara_motion_p1',
-        process.env.HA_TEMP_SENSOR   || 'sensor.tapo_t310_temperature',
-        process.env.HA_DOOR_SENSOR   || 'binary_sensor.door_sensor'
+        process.env.HA_TEMP_SENSOR || 'sensor.tapo_t310_temperature',
+        process.env.HA_DOOR_SENSOR || 'binary_sensor.door_sensor'
       ];
       for (const s of states) {
         if (ENTITIES.includes(s.entity_id)) {
@@ -192,7 +206,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       return { content: [{ type: "text", text: JSON.stringify(relevant, null, 2) }] };
     }
-    
+
     else if (name === "hydra_paper_trade") {
       const { symbol, action, qty, price } = args;
       const normalizedAction = String(action).toLowerCase();
@@ -213,13 +227,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }]
       };
     }
-    
+
     else if (name === "hydra_portfolio") {
       const { limit = 10 } = args;
       const trades = getTrades(limit);
       return { content: [{ type: "text", text: JSON.stringify(trades, null, 2) }] };
     }
-    
+
     else if (name === "hydra_debt_status") {
       const debtData = getDebt();
       if (!debtData) {
@@ -230,35 +244,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const text = `₹${remaining.toLocaleString()} remaining, ₹${debtData.paid.toLocaleString()} paid (${pct}%)\nTotal debt: ₹${debtData.debt.toLocaleString()}\nWedding Fund: ₹${debtData.wedding_fund.toLocaleString()}\nLast Updated: ${debtData.updated_at}`;
       return { content: [{ type: "text", text }] };
     }
-    
+
     else if (name === "hydra_search_brain") {
       const { query, limit = 5 } = args;
       const results = await searchContext(query, limit);
       return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
-    
+
     else if (name === "hydra_write_context") {
       const { source, type, content } = args;
       await writeContext(source, type, content);
       return { content: [{ type: "text", text: `Successfully wrote context of type [${type}] from ${source}.` }] };
     }
-    
+
     else if (name === "hydra_agent_status") {
       const spend = await getMonthlySpend();
       const statusList = [];
       const now = new Date();
-      
+
       for (const agent of ACTIVE_AGENT_NAMES) {
         const paused = await isPaused(agent);
         const open = isOpen(agent);
-        
+
         let state = "healthy";
         if (open) state = "circuit-open (failing)";
         else if (paused) state = "paused (budget exceeded)";
-        
+
         const cost = spend.perAgent[agent]?.cost || 0;
         const tokens = spend.perAgent[agent]?.tokens || 0;
-        
+
         statusList.push({
           agent,
           status: state,
@@ -266,16 +280,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           monthly_tokens: tokens
         });
       }
-      
+
       const summary = {
         total_monthly_spend: `$${spend.total.toFixed(4)}`,
         budget_remaining: `$${spend.remaining.toFixed(4)}`,
         agents: statusList
       };
-      
+
       return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
     }
-    
+
+    else if (name === "hydra_read_messages") {
+      let { channel, contact, limit = 10 } = args;
+      if (limit > 50) limit = 50;
+      const messages = await getMessages(channel, contact, limit);
+      return { content: [{ type: "text", text: JSON.stringify(messages, null, 2) }] };
+    }
+
     else {
       throw new Error(`Unknown tool: ${name}`);
     }

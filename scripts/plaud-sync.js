@@ -12,22 +12,15 @@
  */
 import fs from 'fs-extra';
 import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import Anthropic from '@anthropic-ai/sdk';
 import { google } from 'googleapis';
 import { detectTags, wrapWithFrontmatter } from './audio-tagger.js';
 
-const execFileAsync = promisify(execFile);
-
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const PLAUD_API_KEY    = process.env.PLAUD_API_KEY;
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const WHISPER_CPP_PATH  = process.env.WHISPER_CPP_PATH || '/usr/local/bin/whisper-cpp';
-const WHISPER_MODEL_PATH = (process.env.WHISPER_MODEL_PATH || '~/models/ggml-large-v3-q5_0.bin')
-    .replace(/^~/, process.env.HOME);
-const GOOGLE_SA_PATH   = (process.env.GOOGLE_SERVICE_ACCOUNT_PATH || '')
+const PLAUD_API_KEY = process.env.PLAUD_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const GOOGLE_SA_PATH = (process.env.GOOGLE_SERVICE_ACCOUNT_PATH || '')
     .replace(/^~/, process.env.HOME);
 const GOOGLE_DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || '';
 
@@ -41,7 +34,7 @@ const TEMP_DIR = path.join(STATE_DIR, 'tmp');
 
 const PLAUD_BASE_URL = 'https://api.plaud.ai';
 const POLL_INTERVAL = Number(process.env.PLAUD_POLL_INTERVAL || 300000); // 5 min
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const SUMMARY_MODEL = 'google/gemini-2.5-flash';
 
 // ── State Management ──────────────────────────────────────────────────────────
 
@@ -151,34 +144,32 @@ async function uploadToDrive(filePath, mimeType, driveName) {
 // ── Whisper.cpp Transcription ─────────────────────────────────────────────────
 
 async function transcribeWithWhisper(audioPath) {
-    console.log(`[plaud-sync] 🎙️  Transcribing with whisper.cpp: ${path.basename(audioPath)}`);
+    if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set');
+    console.log(`[plaud-sync] 🎙️  Transcribing using OpenAI Whisper API: ${path.basename(audioPath)}`);
 
-    // whisper.cpp outputs to <input>.txt by default with --output-txt
-    const { stdout, stderr } = await execFileAsync(WHISPER_CPP_PATH, [
-        '-m', WHISPER_MODEL_PATH,
-        '-f', audioPath,
-        '--language', 'auto',
-        '--output-txt',
-        '--no-timestamps'
-    ], {
-        timeout: 600000, // 10 min max for long recordings
-        maxBuffer: 50 * 1024 * 1024 // 50MB output buffer
+    const fileBuffer = await fs.readFile(audioPath);
+    const blob = new Blob([fileBuffer], { type: 'audio/mpeg' });
+
+    const form = new FormData();
+    form.append('file', blob, path.basename(audioPath));
+    form.append('model', 'whisper-1');
+
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        body: form
     });
 
-    // whisper.cpp writes output to <audioPath>.txt
-    const txtPath = audioPath + '.txt';
-    if (await fs.pathExists(txtPath)) {
-        const transcript = (await fs.readFile(txtPath, 'utf-8')).trim();
-        await fs.remove(txtPath); // cleanup
-        return transcript;
+    if (!res.ok) {
+        const errObj = await res.json().catch(() => ({}));
+        throw new Error(`OpenAI API Error: ${res.status} - ${errObj.error?.message || res.statusText}`);
     }
 
-    // Fallback: try stdout
-    if (stdout && stdout.trim().length > 10) {
-        return stdout.trim();
-    }
-
-    throw new Error(`whisper.cpp produced no output. stderr: ${stderr?.slice(0, 500)}`);
+    const json = await res.json();
+    if (!json.text) throw new Error('API returned successfully but without transcript text.');
+    return json.text;
 }
 
 // ── Claude Summarization ──────────────────────────────────────────────────────
@@ -218,29 +209,31 @@ List the 5 most notable or quotable moments from the conversation.
 Note if the original transcript was in Hinglish and mention any terms kept in their original language for clarity.`;
 }
 
-async function summarizeWithClaude(transcript, recordingName) {
-    if (!ANTHROPIC_API_KEY) {
-        console.warn('[plaud-sync] ANTHROPIC_API_KEY not set, skipping Claude summarization');
+async function summarizeWithOpenRouter(transcript, recordingName) {
+    if (!OPENROUTER_API_KEY) {
+        console.warn('[plaud-sync] OPENROUTER_API_KEY not set, skipping OpenRouter summarization');
         return `# ${recordingName}\n\n## Transcript\n\n${transcript}`;
     }
 
-    const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-
-    const message = await client.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: 4096,
-        messages: [
-            {
-                role: 'user',
-                content: buildClaudePrompt(transcript, recordingName)
-            }
-        ]
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model: SUMMARY_MODEL,
+            messages: [{ role: 'user', content: buildClaudePrompt(transcript, recordingName) }]
+        })
     });
 
-    const content = message.content
-        .filter(c => c.type === 'text')
-        .map(c => c.text)
-        .join('\n\n');
+    if (!res.ok) {
+        console.warn(`[plaud-sync] Summarization failed. Status: ${res.status}`);
+        return `# ${recordingName}\n\n## Transcript\n\n${transcript}`;
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content || '';
 
     // Wrap with metadata header
     const safeTitle = String(recordingName)
@@ -250,7 +243,7 @@ async function summarizeWithClaude(transcript, recordingName) {
 title: "${safeTitle}"
 date: "${new Date().toISOString()}"
 source: plaud-sync
-model: ${CLAUDE_MODEL}
+model: ${SUMMARY_MODEL}
 ---
 
 # 🎙️ ${recordingName}
@@ -328,8 +321,8 @@ async function processRecording(recording, processedIds) {
             console.log(`[plaud-sync] 📄 Using Plaud API transcript: ${transcript.length} chars`);
         }
 
-        // 4. Summarize with Claude
-        let markdown = await summarizeWithClaude(transcript, recording.name || baseName);
+        // 4. Summarize with OpenRouter
+        let markdown = await summarizeWithOpenRouter(transcript, recording.name || baseName);
 
         // 4.5. Tag the file and add frontmatter
         const todayStr = new Date().toISOString().split('T')[0];
@@ -361,7 +354,7 @@ async function processRecording(recording, processedIds) {
     } catch (e) {
         console.error(`[plaud-sync] ❌ Failed to process ${recording.name || recording.id}: ${e.message}`);
         // Clean up temp files on failure
-        await fs.remove(tempAudioPath).catch(() => {});
+        await fs.remove(tempAudioPath).catch(() => { });
     }
 }
 
@@ -398,17 +391,8 @@ async function poll() {
 function validateConfig() {
     const issues = [];
     if (!PLAUD_API_KEY) issues.push('PLAUD_API_KEY is required');
-    if (!ANTHROPIC_API_KEY) issues.push('ANTHROPIC_API_KEY recommended (summarization disabled without it)');
-
-    // Check whisper.cpp binary exists
-    try {
-        if (!fs.pathExistsSync(WHISPER_CPP_PATH)) {
-            issues.push(`whisper.cpp binary not found at ${WHISPER_CPP_PATH} (run scripts/setup-whisper.sh)`);
-        }
-        if (!fs.pathExistsSync(WHISPER_MODEL_PATH)) {
-            issues.push(`Whisper model not found at ${WHISPER_MODEL_PATH} (run scripts/setup-whisper.sh)`);
-        }
-    } catch { /* ignore fs errors */ }
+    if (!OPENAI_API_KEY) issues.push('OPENAI_API_KEY is required for Whisper API transcription');
+    if (!OPENROUTER_API_KEY) issues.push('OPENROUTER_API_KEY recommended (summarization disabled without it)');
 
     if (issues.length > 0) {
         console.warn('[plaud-sync] ⚠️  Configuration issues:');
@@ -426,8 +410,6 @@ function validateConfig() {
 console.log('[plaud-sync] Starting Plaud AI sync service');
 console.log(`[plaud-sync] Poll interval: ${POLL_INTERVAL / 1000}s`);
 console.log(`[plaud-sync] Audio inbox: ${AUDIO_INBOX}`);
-console.log(`[plaud-sync] Whisper binary: ${WHISPER_CPP_PATH}`);
-console.log(`[plaud-sync] Whisper model: ${WHISPER_MODEL_PATH}`);
 console.log(`[plaud-sync] Drive folder: ${GOOGLE_DRIVE_FOLDER_ID || '(not configured)'}`);
 
 validateConfig();

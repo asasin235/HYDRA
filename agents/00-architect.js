@@ -8,6 +8,8 @@ import Agent from '../core/agent.js';
 import { getLogs, getDebt, setState } from '../core/db.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { AGENT_NAMES, AGENT_NAMESPACES } from '../core/registry.js';
+import { readRecentContext, readTodayScreenActivity, readTodayAudioTranscripts } from '../core/openclaw-memory.js';
+import { getMessages } from '../core/hermes-bridge.js';
 
 validateEnv('00-architect');
 
@@ -16,7 +18,7 @@ const SLACK_STATUS_CHANNEL = '#00-architect';
 
 const architect = new Agent({
   name: '00-architect',
-  model: 'google/gemini-flash-3',
+  model: 'google/gemini-2.5-flash',
   systemPromptPath: 'prompts/00-architect.txt',
   tools: [],
   namespace: '00_ARCHITECT',
@@ -32,7 +34,7 @@ async function postSlack(text) {
     await axios.post('https://slack.com/api/chat.postMessage', {
       channel: SLACK_STATUS_CHANNEL,
       text
-    }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` }});
+    }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
   } catch (e) {
     console.error('[00-architect] Slack post error:', e.message);
   }
@@ -66,14 +68,39 @@ async function buildMorningBrief() {
     const spend = await getMonthlySpend();
     const debt = getDebt();
 
+    // Pull shared brain context for richer briefs
+    let screenCtx = '';
+    let audioCtx = '';
+    let notesCtx = '';
+    let socialPulse = '';
+    try {
+      screenCtx = await readRecentContext('screen', 1);
+      audioCtx = await readRecentContext('audio', 1);
+      notesCtx = await readRecentContext('notes', 1);
+
+      const [wa_sabiha] = await Promise.allSettled([
+        getMessages('whatsapp', 'Sabiha', 3)
+      ]);
+
+      if (wa_sabiha.status === 'fulfilled' && wa_sabiha.value?.length) {
+        socialPulse += 'WhatsApp (Sabiha): ' + wa_sabiha.value.map(m => `"${m.text}"`).join(' | ') + '\n';
+      }
+    } catch (e) {
+      console.error('[00-architect] context/pulse read error:', e.message);
+    }
+
     const context = [
       `Budget month ${spend.month}: total=$${spend.total.toFixed(2)}, remaining=$${spend.remaining.toFixed(2)}`,
-      `Debt tracker: debt=$${(debt?.debt||0).toFixed(2)} paid=$${(debt?.paid||0).toFixed(2)} wedding=$${(debt?.wedding_fund||0).toFixed(2)}`,
+      `Debt tracker: debt=$${(debt?.debt || 0).toFixed(2)} paid=$${(debt?.paid || 0).toFixed(2)} wedding=$${(debt?.wedding_fund || 0).toFixed(2)}`,
       'Today logs by agent:',
-      logsText || '(no logs found)'
-    ].join('\n');
+      logsText || '(no logs found)',
+      screenCtx ? `\nRecent Screen Activity:\n${screenCtx.slice(0, 2000)}` : '',
+      audioCtx ? `\nRecent Call/Audio Notes:\n${audioCtx.slice(0, 2000)}` : '',
+      notesCtx ? `\nAgent Notes:\n${notesCtx.slice(0, 1000)}` : '',
+      socialPulse ? `\nSocial Pulse (Unread/Recent messages):\n${socialPulse.slice(0, 1000)}` : ''
+    ].filter(Boolean).join('\n');
 
-    const msg = await architect.run('Produce today\'s morning briefing for HYDRA.', context);
+    const msg = await architect.run('Produce today\'s morning briefing for HYDRA. Include insights from screen activity, call recordings, agent notes, and social pulse if available.', context);
     await postSlack(msg);
   } catch (e) {
     console.error('[00-architect] morning brief failed:', e.message);
@@ -88,7 +115,7 @@ async function buildEveningSummary() {
 
     const context = [
       `Today token spend total: $${totalToday.toFixed(4)}`,
-      perAgent.map(a => `• ${a.name}: $${(a.cost||0).toFixed(4)}`).join('\n'),
+      perAgent.map(a => `• ${a.name}: $${(a.cost || 0).toFixed(4)}`).join('\n'),
       'Today logs by agent:',
       logsText || '(no logs found)'
     ].join('\n');
@@ -148,8 +175,8 @@ async function runWatchdog() {
   }
 }
 
-// 6AM daily
-cron.schedule('0 6 * * *', async () => { await buildMorningBrief(); }, { timezone: process.env.TZ || 'UTC' });
+// 10:45 AM daily
+cron.schedule('45 10 * * *', async () => { await buildMorningBrief(); }, { timezone: process.env.TZ || 'UTC' });
 
 // 10PM daily
 cron.schedule('0 22 * * *', async () => { await buildEveningSummary(); }, { timezone: process.env.TZ || 'UTC' });

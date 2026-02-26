@@ -16,7 +16,7 @@ const CFO_MONTHLY_DEBT_PAYMENT = Number(process.env.CFO_MONTHLY_DEBT_PAYMENT || 
 
 const cfo = new Agent({
   name: '06-cfobot',
-  model: 'deepseek/deepseek-r1',
+  model: 'google/gemini-2.5-pro',
   systemPromptPath: 'prompts/06-cfobot.txt',
   tools: [],
   namespace: '06_CFO',

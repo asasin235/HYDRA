@@ -32,3 +32,4 @@ build/
 
 # LanceDB local data
 lancedb/
+envo.json

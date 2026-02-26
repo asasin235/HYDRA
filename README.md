@@ -65,18 +65,18 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 
 | #      | Agent           | Model            | Purpose                                                                          | Schedule                                     |
 | ------ | --------------- | ---------------- | -------------------------------------------------------------------------------- | -------------------------------------------- |
-| **00** | `architect`     | Gemini Flash 3   | Chief of Staff: morning/evening briefs, agent watchdog, goal tracking            | 6AM / 10PM daily, watchdog every 30m         |
-| **01** | `edmobot`       | Claude Sonnet 4  | Work productivity: Screenpipe context, Jira tickets, work briefs                 | 9AM daily, Friday 5PM weekly perf            |
-| **02** | `brandbot`      | DeepSeek V3      | Personal brand: GitHub activity → LinkedIn drafts, lead qualification            | Monday 10AM                                  |
-| **03** | `sahibabot`     | Claude Haiku 4.5 | Relationship health: nudges, promise tracking, date suggestions, WhatsApp drafts | 4PM daily nudge, Monday events, 8PM promises |
+| **00** | `architect`     | Gemini 2.5 Flash  | Chief of Staff: morning/evening briefs, agent watchdog, goal tracking            | 6AM / 10PM daily, watchdog every 30m         |
+| **01** | `edmobot`       | Claude Sonnet 4.6 | Work productivity: Jira→GitHub pipeline, auto PR, code fixes, work briefs        | 9AM daily, Friday 5PM weekly perf            |
+| **02** | `brandbot`      | Mistral Small 3.2 | Personal brand: GitHub activity → LinkedIn drafts, lead qualification            | Monday 10AM                                  |
+| **03** | `sahibabot`     | Mistral Small 3.2 | Relationship health: nudges, promise tracking, date suggestions, WhatsApp drafts | 4PM daily nudge, Monday events, 8PM promises |
 | **04** | `socialbot`     | Claude Haiku 4.5 | Social proxy: drafts WhatsApp/iMessage/Discord replies via OpenClaw + Screenpipe | Every 2min scan, 9PM daily summary           |
 | **05** | `jarvis`        | Claude Haiku 4.5 | Home automation via Home Assistant: AC, lights, geyser, sleep mode, sensors      | Every 30m automation check                   |
-| **06** | `cfobot`        | DeepSeek R1      | Personal CFO: SMS spending analysis, debt payoff, wedding fund                   | 11PM nightly, 1st of month projection        |
-| **07** | `biobot`        | Claude Haiku 4.5 | Health tracker: Apple Health sync, HRV readiness, quit tracker, streak tracking  | 6AM / 10PM briefs, 3PM walk nudge            |
+| **06** | `cfobot`        | Gemini 2.5 Pro    | Personal CFO: SMS spending analysis, debt payoff, wedding fund                   | 11PM nightly, 1st of month projection        |
+| **07** | `biobot`        | Mistral Small 3.2 | Health tracker: Apple Health sync, HRV readiness, quit tracker, streak tracking  | 6AM / 10PM briefs, 3PM walk nudge            |
 | **08** | _CareerBot_     | —                | 🔒 Reserved for Phase 2 (career strategy & skill gaps)                           | —                                            |
-| **09** | `wolf`          | DeepSeek R1      | Paper trading: Nifty F&O analysis via Perplexity, ₹1L virtual capital            | Weekdays 9:30AM & 3:30PM, Sunday review      |
-| **10** | `mercenary`     | Claude Sonnet 4  | Freelance pipeline: lead evaluation, proposal generation, invoicing              | 8PM daily lead scan                          |
-| **11** | `auditor`       | Gemini Flash 3   | Weekly reflection: scores all agents, proposes prompt changes, auto-rollback     | Sunday 10PM                                  |
+| **09** | `wolf`          | Gemini 2.5 Pro    | Paper trading: Nifty F&O analysis via Perplexity, ₹1L virtual capital            | Weekdays 9:30AM & 3:30PM, Sunday review      |
+| **10** | `mercenary`     | Claude Sonnet 4.6 | Freelance pipeline: lead evaluation, proposal generation, invoicing              | 8PM daily lead scan                          |
+| **11** | `auditor`       | Mistral Small 3.2 | Weekly reflection: scores all agents, proposes prompt changes, auto-rollback     | Sunday 10PM                                  |
 | **99** | `slack-gateway` | —                | Slack Bolt app: message routing, action handlers, `/hydra-status`                | Always-on (Socket Mode)                      |
 
 > **Agent config is centralised in `core/registry.js`** — a single source of truth for names, models, namespaces, prompt files, and budget tiers.
@@ -125,12 +125,16 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 - WAL mode with 5s busy timeout
 - Stored on Mac Mini internal storage (`~/hydra-brain/brain/hydra.db`)
 
-### `core/memory.js` — Vector Memory (LanceDB, legacy)
+### `core/memory.js` — Vector Memory (LanceDB)
 
 - Embedding model: `text-embedding-3-small` (1536 dimensions) via OpenRouter
-- Tables: `memories`, `daily_logs`, `reflections`
-- Semantic search across agent memories with optional agent filtering
-- Stored on Mac Mini internal storage (`~/hydra-brain/lancedb/`)
+- Tables: `memories`, `daily_logs`, `reflections`, `screen_activity`, `audio_transcripts`, `context_feed`
+- Semantic search across all context sources — screen captures, audio transcripts, agent memories
+- `searchScreenContext(query)` — finds screen activity relevant to a query (used by all agents)
+- `searchAllContext(query)` — unified cross-source search (screen + audio + memories)
+- `addScreenActivity()` / `addAudioTranscript()` — called by `scripts/ingest-context.js`
+- Each agent auto-searches for context using its `contextQuery` from `core/registry.js`
+- Stored at `BRAIN_PATH/lancedb/`
 
 ### `core/openclaw.js` — Messaging Gateway Client
 
@@ -147,6 +151,30 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 - Three data streams: `screen/` (Screenpipe), `audio/` (Plaud Note), `notes/` (agent observations)
 - Exports: `writeScreenActivity()`, `writeAudioTranscript()`, `writeContext()`, `searchContext()`
 - Also: `readTodayScreenActivity()`, `readRecentContext()`
+
+### `core/github.js` — GitHub API (Dual Account)
+
+- Supports two GitHub accounts: **personal** (`GITHUB_TOKEN`) and **work** (`GITHUB_WORK_TOKEN`)
+- EdmoBot defaults to work account; BrandBot uses personal account
+- Operations: `getRepo()`, `listFiles()`, `getFileContent()`, `updateFile()`, `createBranch()`, `createPR()`, `searchCode()`
+- All functions accept optional `account` parameter: `'personal'` or `'work'`
+
+### `core/jira.js` — Jira Cloud API
+
+- Full Jira REST API v3 integration with Basic Auth (email + API token)
+- `getMyTickets()` — fetch assigned tickets filtered by status
+- `getTicketDetails(key)` — full issue details with ADF→text description parsing
+- `transitionTicket(key, status)` — move ticket through workflow (To Do → In Progress → Done)
+- `addJiraComment(key, text)` — add comments to tickets
+- `createJiraIssue()` — create new issues with ADF-formatted descriptions
+
+### `scripts/ingest-context.js` — Context Ingestion Service (PM2)
+
+- Watches `shared_context/screen/*.md` and `audio/*.md` for new entries
+- Parses Markdown into structured entries (timestamp, source, apps, summary)
+- Writes each entry to LanceDB via `core/memory.js` with vector embeddings
+- Polls every 5 minutes, tracks ingestion state to avoid duplicates
+- Feeds the semantic search that all agents use for context
 
 ### `core/validate-env.js` — Per-Agent Startup Validation
 
@@ -332,9 +360,15 @@ Copy `sample.env` to `.env` and fill in all required values.
 | `HOME_ASSISTANT_URL`   | ✅ jarvis | Home Assistant instance URL                                |
 | `HOME_ASSISTANT_TOKEN` | ✅ jarvis | Home Assistant long-lived access token                     |
 | `INTERNAL_API_KEY`     | ✅        | Shared key for inter-service communication                 |
-| `B2_ACCOUNT_ID`        | 🔶        | Backblaze B2 account ID (backup only)                      |
-| `B2_APP_KEY`           | 🔶        | Backblaze B2 application key (backup only)                 |
-| `B2_BUCKET`            | 🔶        | B2 bucket name (default: `hydra-backup`)                   |
+| `GOOGLE_SERVICE_ACCOUNT_PATH` | 🔶 | Path to Google SA JSON file (backup/sync) |
+| `GOOGLE_DRIVE_FOLDER_ID` | 🔶 | Google Drive Folder ID for backups/sync |
+| `GITHUB_WORK_TOKEN`     | ✅ edmobot | Work GitHub PAT (Edmo) for PR creation |
+| `GITHUB_WORK_USERNAME`  | ✅ edmobot | Work GitHub username |
+| `GITHUB_WORK_ORG`       | 🔶 edmobot | Work GitHub org name (if applicable) |
+| `JIRA_BASE_URL`         | ✅ edmobot | Jira Cloud URL (e.g. `https://edmo.atlassian.net`) |
+| `JIRA_EMAIL`            | ✅ edmobot | Jira account email |
+| `JIRA_API_TOKEN`        | ✅ edmobot | Jira API token (from id.atlassian.com) |
+| `JIRA_PROJECT_KEY`      | ✅ edmobot | Default Jira project key (e.g. `EDMO`) |
 
 See `sample.env` for the full list including optional variables for each agent.
 
@@ -465,8 +499,8 @@ The Architect agent checks heartbeats every 30 minutes. If any online agent hasn
 ### Automated Backup
 
 ```bash
-# Encrypted backup to Backblaze B2 via rclone
-./scripts/backup.sh
+# Backup to Google Drive via rclone
+./scripts/backup-gdrive.sh
 ```
 
 - Uses `rclone crypt` for at-rest encryption
@@ -667,12 +701,58 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 | Transcription   | whisper.cpp local (Apple Silicon Metal GPU)                                         |
 | Plaud Sync      | Plaud REST API → Claude Sonnet → Google Drive                                       |
 | Local Summary   | Ollama (gemma3:4b) for offline summarization in ingest-audio                        |
-| Backup          | rclone + Backblaze B2 (encrypted)                                                   |
+| Backup          | rclone + Google Drive (encrypted)                                                   |
 | Logging         | Winston (JSON in PM2, pretty-print in dev)                                          |
 | Linting         | ESLint (Node.js ESM flat config)                                                    |
 | Testing         | Vitest (🚧 Sprint 2)                                                                |
 | Brain Storage   | Mac Mini internal SSD                                                               |
 | Heavy Data      | External SSD / Google Drive                                                         |
+
+---
+
+## 📋 Changelog
+
+### 2026-02-26 — Screenpipe Integration + LanceDB Memory + EdmoBot Coding Pipeline
+
+**Screenpipe → HYDRA Pipeline (MacBook Pro → Mac Mini)**
+- Screenpipe v0.3.135 installed on MacBook Pro with Apple Vision OCR + local Whisper
+- `~/hydra-screenpipe-sync/sync.js` runs on MacBook: fetches screen data every 15min, summarizes via Ollama (mistral-nemo), SSHs markdown to Mac Mini `shared_context/screen/`
+- LaunchAgents for both Screenpipe and sync daemon (auto-start on login)
+- Passwordless SSH configured (Ed25519 key)
+
+**LanceDB Semantic Memory**
+- Completed `core/memory.js` — added `screen_activity`, `audio_transcripts`, `context_feed` tables
+- OpenRouter `text-embedding-3-small` embeddings (1536-dim, ~$0.01/month)
+- `scripts/ingest-context.js` PM2 service watches shared_context/ and ingests into LanceDB
+- Each agent has a `contextQuery` in `registry.js` for role-based semantic search
+- Agent base class (`core/agent.js`) auto-searches LanceDB for relevant context per agent role
+- CFOBot only sees finance-related captures, BioBot only health-related, etc.
+
+**EdmoBot Autonomous Coding Pipeline**
+- Extended `core/jira.js` with full CRUD: `getMyTickets()`, `getTicketDetails()`, `transitionTicket()`, `addJiraComment()`
+- Created `core/github.js` with dual account support (personal + Edmo work)
+- EdmoBot now has 11 tools: list_my_tickets, get_ticket_details, read_repo_file, list_repo_files, search_repo_code, create_branch, edit_repo_file, create_pull_request, update_ticket_status, comment_on_ticket, draft_jira_issue
+- Autonomous pipeline: `@hydra edmobot fix EDMO-123` → reads ticket → finds code → creates branch → fixes → PR → updates Jira → notifies Slack
+- Cron: every 2h (weekdays) lists assigned tickets on Slack, 9AM daily brief, Friday 5PM weekly summary
+
+**Model Upgrades**
+- EdmoBot: `anthropic/claude-sonnet-4` → `anthropic/claude-sonnet-4.6`
+- CFOBot: `deepseek/deepseek-r1` → `google/gemini-2.5-pro`
+- Wolf: `deepseek/deepseek-r1` → `google/gemini-2.5-pro`
+- Architect: `google/gemini-flash-3` (broken) → `google/gemini-2.5-flash`
+- BrandBot/SahibaBot: `mistral/mistral-small` → `mistralai/mistral-small-3.2-24b-instruct`
+- BioBot: `google/gemini-2.0-flash-001` → `google/gemini-2.5-flash`
+- Mercenary: `anthropic/claude-sonnet-4` → `anthropic/claude-sonnet-4.6`
+- Auditor/Jarvis: `google/gemini-2.0-flash-001` → `mistralai/mistral-small-3.2-24b-instruct`
+- Updated `core/bottleneck.js` MODEL_RATES for all new models
+
+**Bug Fixes**
+- Fixed `google/gemini-flash-3` model ID (doesn't exist on OpenRouter) → `google/gemini-2.5-flash`
+- Fixed `mistral/mistral-small` prefix → `mistralai/mistral-small-3.2-24b-instruct`
+- Fixed corrupted `03_SAHIBA/heartbeat.json`
+- Installed missing `@anthropic-ai/sdk` dependency for plaud-sync
+- Rebuilt `better-sqlite3` native module for current Node.js
+- Fixed `BRAIN_PATH` mismatch (hydra-brain vs hydra-mind)
 
 ---
 

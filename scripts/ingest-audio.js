@@ -181,7 +181,15 @@ async function processAudioFile(filePath) {
         const durationS = null; // Could be extracted with ffprobe if needed
 
         // Extract tags and agent routing (only for newly generated transcripts)
-        const metadata = sidecar ? {} : detectTags(transcript);
+        let metadata = {};
+        if (sidecar) {
+            const tagsMatch = sidecar.content.match(/tags:\s*\[([^\]]+)\]/);
+            const agentsMatch = sidecar.content.match(/agents:\s*\[([^\]]+)\]/);
+            metadata.tags = tagsMatch ? tagsMatch[1].split(',').map(s => s.trim()) : [];
+            metadata.agents = agentsMatch ? agentsMatch[1].split(',').map(s => s.trim()) : [];
+        } else {
+            metadata = detectTags(transcript);
+        }
 
         // Write to shared brain
         await writeAudioTranscript('plaud-note', filename, transcript, summary, durationS, metadata);

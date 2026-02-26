@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
+import { writeSkill } from '../core/hermes-bridge.js';
 
 validateEnv('10-mercenary');
 
@@ -16,7 +17,7 @@ const INVOICES_DIR = path.join(BRAIN_PATH, 'brain', '10_MERCENARY', 'invoices');
 
 const merc = new Agent({
   name: '10-mercenary',
-  model: 'anthropic/claude-sonnet-4',
+  model: 'anthropic/claude-sonnet-4.6',
   systemPromptPath: 'prompts/10-mercenary.txt',
   tools: [],
   namespace: '10_MERCENARY',
@@ -84,6 +85,27 @@ Tone: confident, no-BS, client-first.`,
     const client = (lead.client || 'unknown').replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const filename = `proposal_${client}_${date}.md`;
     await fs.writeFile(path.join(PROPOSALS_DIR, filename), proposal, 'utf-8');
+
+    // Save this workflow as a Hermes skill for procedural memory
+    const skillContent = `---
+name: hydra-mercenary-deployments
+description: Freelance deployment playbooks and workflow scripts discovered by The Mercenary.
+---
+
+# Hydra Mercenary Deployment Playbooks
+
+## Proposal — ${client} (${date})
+**Stack:** ${lead.tech || 'General'}
+**Budget Range:** ${lead.budget || 'TBD'}
+
+### Approach Used
+${proposal.slice(0, 800)}
+
+---
+`;
+    // Append to existing skill file instead of overwriting
+    await writeSkill('hydra-mercenary', skillContent).catch(() => { });
+
     return { filename, proposal: proposal.slice(0, 500) };
   } catch (e) {
     return { error: e.message };

@@ -10,17 +10,22 @@ const CIRCUIT_BREAKERS_FILE = path.join(USAGE_DIR, 'circuit_breakers.json');
 
 // Cost per token (in dollars) for different models
 const MODEL_RATES = {
-  'google/gemini-flash-3': 0.000001,
-  'anthropic/claude-sonnet-4': 0.000015,
-  'deepseek/deepseek-r1': 0.0000055,
-  'mistral/mistral-small-latest': 0.0000004,
-  // Common aliases
-  'gemini-flash': 0.000001,
-  'claude-sonnet': 0.000015,
-  'deepseek-r1': 0.0000055,
-  'mistral-small': 0.0000004,
+  // Active models (updated 2026-02-26)
+  'google/gemini-2.5-flash': 0.0000014,          // $0.30/M in, $2.50/M out (avg)
+  'google/gemini-2.5-pro': 0.0000056,             // $1.25/M in, $10.00/M out (avg)
+  'anthropic/claude-sonnet-4.6': 0.000009,         // $3.00/M in, $15.00/M out (avg)
+  'anthropic/claude-haiku-4-5': 0.000003,          // $1.00/M in, $5.00/M out (avg)
+  'mistralai/mistral-small-3.2-24b-instruct': 0.00000012,  // $0.06/M in, $0.18/M out (avg)
+  'deepseek/deepseek-r1': 0.0000016,              // $0.70/M in, $2.50/M out (avg)
+  // Legacy aliases (kept for backward compat)
+  'google/gemini-flash-3': 0.0000014,
+  'anthropic/claude-sonnet-4': 0.000009,
+  'gemini-flash': 0.0000014,
+  'claude-sonnet': 0.000009,
+  'deepseek-r1': 0.0000016,
+  'mistral-small': 0.00000012,
   // Default fallback rate
-  'default': 0.00001
+  'default': 0.000005
 };
 
 // Monthly budget cap in dollars

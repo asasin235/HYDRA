@@ -7,17 +7,19 @@
 
 // Keyword → tag mapping
 const TAG_RULES = {
-  health:  ['health', 'doctor', 'hospital', 'medicine', 'workout', 'gym', 'sleep', 'hrv', 'heart rate', 'steps', 'calories', 'diet', 'fasting'],
+  health: ['health', 'doctor', 'hospital', 'medicine', 'workout', 'gym', 'sleep', 'hrv', 'heart rate', 'steps', 'calories', 'diet', 'fasting'],
   finance: ['payment', 'credit', 'debit', 'salary', 'emi', 'loan', 'invest', 'rupee', '₹', 'budget', 'spend', 'stock', 'nifty', 'portfolio'],
-  work:    ['sprint', 'standup', 'jira', 'deploy', 'pr', 'code review', 'pipeline', 'production', 'client call', 'bug', 'ticket', 'feature', 'github'],
+  work: ['sprint', 'standup', 'jira', 'deploy', 'pr', 'code review', 'pipeline', 'production', 'client call', 'bug', 'ticket', 'feature', 'github', 'edmo'],
+  relationship: ['sabiha', 'relationship', 'date', 'wedding', 'anniversary', 'gifts'],
   meeting: ['meeting', 'standup', 'sync', 'call', 'discussion', 'agenda', 'minutes', 'action items', 'catchup']
 };
 
 // Tag → agent routing
 const TAG_AGENTS = {
-  health:  ['07-biobot'],
+  health: ['07-biobot'],
   finance: ['06-cfobot'],
-  work:    ['01-edmobot', '00-architect'],
+  work: ['01-edmobot', '00-architect'],
+  relationship: ['03-sahibabot'],
   meeting: ['00-architect']
 };
 
@@ -28,7 +30,7 @@ const TAG_AGENTS = {
  */
 export function detectTags(transcript) {
   if (!transcript) return { tags: [], agents: [] };
-  
+
   const lower = transcript.toLowerCase();
   const tags = new Set();
   const agents = new Set();
@@ -37,7 +39,7 @@ export function detectTags(transcript) {
     for (const kw of keywords) {
       if (lower.includes(kw)) {
         tags.add(tag);
-        
+
         // Add mapped agents
         const mappedAgents = TAG_AGENTS[tag] || [];
         for (const agent of mappedAgents) {
@@ -67,7 +69,7 @@ export function detectTags(transcript) {
 export function buildYAMLFrontmatter({ source, file, tags, agents, date }) {
   const tagsStr = tags.length > 0 ? `[${tags.join(', ')}]` : '[]';
   const agentsStr = agents.length > 0 ? `[${agents.join(', ')}]` : '[]';
-  
+
   return `---
 source: ${source}
 file: ${file}

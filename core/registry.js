@@ -20,18 +20,18 @@
 
 /** @type {Object.<string, AgentConfig>} */
 export const AGENTS = {
-  '00-architect':   { namespace: '00_ARCHITECT',  model: 'google/gemini-flash-3',         promptFile: '00-architect.txt',   tier: 1, slackChannel: '#00-architect' },
-  '01-edmobot':     { namespace: '01_EDMO',       model: 'anthropic/claude-sonnet-4',      promptFile: '01-edmobot.txt',     tier: 1, slackChannel: '#01-edmobot' },
-  '02-brandbot':    { namespace: '02_BRAND',      model: 'mistral/mistral-small',          promptFile: '02-brandbot.txt',    tier: 3, slackChannel: '#02-brandbot' },
-  '03-sahibabot':   { namespace: '03_SAHIBA',     model: 'mistral/mistral-small',          promptFile: '03-sahibabot.txt',   tier: 2, slackChannel: '#03-sahibabot' },
-  '04-socialbot':   { namespace: '04_SOCIAL',     model: 'anthropic/claude-haiku-4-5',     promptFile: '04-socialbot.txt',   tier: 2, slackChannel: '#04-socialbot' },
-  '05-jarvis':      { namespace: '05_JARVIS',     model: 'google/gemini-flash-3',          promptFile: '05-jarvis.txt',      tier: 2, slackChannel: '#05-jarvis' },
-  '06-cfobot':      { namespace: '06_CFO',        model: 'deepseek/deepseek-r1',           promptFile: '06-cfobot.txt',      tier: 1, slackChannel: '#06-cfobot' },
-  '07-biobot':      { namespace: '07_BIO',        model: 'google/gemini-flash-3',          promptFile: '07-biobot.txt',      tier: 2, slackChannel: '#07-biobot' },
-  '09-wolf':        { namespace: '09_WOLF',       model: 'deepseek/deepseek-r1',           promptFile: '09-wolf.txt',        tier: 3, slackChannel: '#09-wolf' },
-  '10-mercenary':   { namespace: '10_MERCENARY',  model: 'anthropic/claude-sonnet-4',      promptFile: '10-mercenary.txt',   tier: 3, slackChannel: '#10-mercenary' },
-  '11-auditor':     { namespace: '11_AUDITOR',    model: 'google/gemini-flash-3',          promptFile: '11-auditor.txt',     tier: 3, slackChannel: '#11-auditor' },
-  '99-slack-gateway': { namespace: '99_GATEWAY',  model: null,                             promptFile: null,                 tier: 1, slackChannel: null },
+  '00-architect': { namespace: '00_ARCHITECT', model: 'google/gemini-2.5-flash', promptFile: '00-architect.txt', tier: 1, contextQuery: 'daily progress goals alignment productivity health finances relationship', slackChannel: '#00-architect' },
+  '01-edmobot': { namespace: '01_EDMO', model: 'anthropic/claude-sonnet-4.6', promptFile: '01-edmobot.txt', tier: 1, contextQuery: 'coding backend Node.js Vapi work tasks Jira pull requests engineering', slackChannel: '#01-edmobot' },
+  '02-brandbot': { namespace: '02_BRAND', model: 'mistralai/mistral-small-3.2-24b-instruct', promptFile: '02-brandbot.txt', tier: 3, contextQuery: 'social media content LinkedIn Twitter freelance leads marketing brand', slackChannel: '#02-brandbot' },
+  '03-sahibabot': { namespace: '03_SAHIBA', model: 'mistralai/mistral-small-3.2-24b-instruct', promptFile: '03-sahibabot.txt', tier: 2, contextQuery: 'Sabiha relationship personal messages calls wedding plans gifts', slackChannel: '#03-sahibabot' },
+  '04-socialbot': { namespace: '04_SOCIAL', model: 'anthropic/claude-haiku-4-5', promptFile: '04-socialbot.txt', tier: 2, contextQuery: 'WhatsApp iMessage Discord messages conversations social replies', slackChannel: '#04-socialbot' },
+  '05-jarvis': { namespace: '05_JARVIS', model: 'mistralai/mistral-small-3.2-24b-instruct', promptFile: '05-jarvis.txt', tier: 2, contextQuery: 'home automation lights temperature air quality smart home IoT', slackChannel: '#05-jarvis' },
+  '06-cfobot': { namespace: '06_CFO', model: 'google/gemini-2.5-pro', promptFile: '06-cfobot.txt', tier: 1, contextQuery: 'finances budget expenses debt payments bank salary invoices transactions money', slackChannel: '#06-cfobot' },
+  '07-biobot': { namespace: '07_BIO', model: 'mistralai/mistral-small-3.2-24b-instruct', promptFile: '07-biobot.txt', tier: 2, contextQuery: 'health fitness exercise sleep diet smoking steps heart rate wellness', slackChannel: '#07-biobot' },
+  '09-wolf': { namespace: '09_WOLF', model: 'google/gemini-2.5-pro', promptFile: '09-wolf.txt', tier: 3, contextQuery: 'trading stocks options F&O market portfolio investments Nifty risk', slackChannel: '#09-wolf' },
+  '10-mercenary': { namespace: '10_MERCENARY', model: 'anthropic/claude-sonnet-4.6', promptFile: '10-mercenary.txt', tier: 3, contextQuery: 'freelance clients projects code deployment contracts deadlines', slackChannel: '#10-mercenary' },
+  '11-auditor': { namespace: '11_AUDITOR', model: 'mistralai/mistral-small-3.2-24b-instruct', promptFile: '11-auditor.txt', tier: 3, contextQuery: 'agent performance metrics errors logs uptime budget utilisation', slackChannel: '#11-auditor' },
+  '99-slack-gateway': { namespace: '99_GATEWAY', model: null, promptFile: null, tier: 1, slackChannel: null },
 };
 
 /** All agent names in order */

@@ -21,7 +21,7 @@ const PROMPTS_DIR = path.join(process.cwd(), 'prompts');
 // Auditor uses Gemini Flash for processing multiple agents cheaply
 const auditor = new Agent({
   name: '11-auditor',
-  model: 'google/gemini-flash-3',
+  model: 'mistralai/mistral-small-3.2-24b-instruct',
   systemPromptPath: 'prompts/11-auditor.txt',
   tools: [],
   namespace: '11_AUDITOR',

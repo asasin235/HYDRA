@@ -1,9 +1,8 @@
 /**
- * 04-socialbot.js — Social proxy agent (OpenClaw integration)
- * Receives incoming chat messages from OpenClaw Gateway via webhook,
- * drafts replies using Claude Haiku with Aatif's personality prompt,
+ * 04-socialbot.js — Social proxy agent (Hermes Gateway integration)
+ * Drafts replies to incoming WhatsApp/Telegram/Discord messages,
  * posts drafts to Slack for human-in-the-loop approval,
- * sends approved replies back through OpenClaw.
+ * sends approved replies through Hermes (native messaging gateway).
  */
 import cron from 'node-cron';
 import axios from 'axios';
@@ -201,14 +200,14 @@ async function draftReply(channel, contact, message, threadHistory) {
   }
 }
 
-import { sendMessage as openclawSend } from '../core/openclaw.js';
+import { sendMessage as hermesSend } from '../core/hermes-bridge.js';
 
 async function executeSend(draftId) {
   const draft = await getDraft(draftId);
   if (!draft) return { error: 'Draft not found' };
 
   try {
-    const result = await openclawSend(draft.channel, draft.contact, draft.message);
+    const result = await hermesSend(draft.channel, draft.contact, draft.message);
 
     if (!result.success) {
       return { error: result.error };
@@ -232,8 +231,8 @@ async function executeSend(draftId) {
   }
 }
 
-// ── Webhook server: receives messages from OpenClaw ──────────────────────────
-
+// ── Webhook server: receives messages from Hermes Gateway ──────────────────────────
+// Hermes posts incoming messages here via its webhook integration
 const webhookApp = express();
 webhookApp.use(express.json());
 

@@ -5,6 +5,8 @@ import express from 'express';
 import helmet from 'helmet';
 import { checkBudget, recordUsage, isOpen, isPaused } from './bottleneck.js';
 import { brainPath, appendBrain, writeBrain } from './filesystem.js';
+import { searchScreenContext } from './memory.js';
+import { AGENTS } from './registry.js';
 import { createLogger } from './logger.js';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
@@ -149,7 +151,7 @@ async function withRetry(fn, agentName, log, maxAttempts = 3) {
 }
 
 export default class Agent {
-  constructor({ name, model, systemPromptPath, tools = [], namespace, tokenBudget = 4000 }) {
+  constructor({ name, model, systemPromptPath, tools = [], namespace, tokenBudget = 4000, useScreenContext = true }) {
     this.name = name;
     this.model = model;
     this.systemPromptPath = systemPromptPath;
@@ -159,6 +161,7 @@ export default class Agent {
     this.systemPrompt = '';
     this._startedAt = Date.now();
     this.log = createLogger(name);
+    this.useScreenContext = useScreenContext;
 
     // Register with health server
     _agentRegistry.set(this.name, { lastRun: null, tokensUsed: 0, tokensBudget: tokenBudget, circuit: 'closed', startedAt: this._startedAt });
@@ -217,10 +220,31 @@ export default class Agent {
         await this.reloadPrompt();
       }
 
+      // Auto-inject relevant context from LanceDB (semantic search per agent role)
+      let contextSnippets = '';
+      if (this.useScreenContext) {
+        try {
+          const agentCfg = AGENTS[this.name];
+          const query = agentCfg?.contextQuery || this.name;
+          const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+          const results = await searchScreenContext(query, { limit: 5, since });
+          if (results.length > 0) {
+            contextSnippets = results.map(r =>
+              `[${r.timestamp}] [${r.apps}] ${r.summary}`
+            ).join('\n\n');
+          }
+        } catch (e) {
+          this.log.warn('LanceDB context search failed:', e.message);
+        }
+      }
+
       // Build messages
       const messages = [];
       if (this.systemPrompt) {
         messages.push({ role: 'system', content: this.systemPrompt });
+      }
+      if (contextSnippets) {
+        messages.push({ role: 'system', content: `Relevant screen activity (last 24h, filtered for your role):\n${contextSnippets}` });
       }
       if (context) {
         messages.push({ role: 'system', content: `Additional context for ${this.name}:\n${context}` });

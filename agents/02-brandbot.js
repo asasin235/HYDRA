@@ -17,7 +17,7 @@ const MERCENARY_LEADS_FILE = path.join(BRAIN_PATH, 'brain', '10_MERCENARY', 'lea
 
 const brand = new Agent({
   name: '02-brandbot',
-  model: 'mistral/mistral-small-latest',
+  model: 'mistralai/mistral-small-3.2-24b-instruct',
   systemPromptPath: 'prompts/02-brandbot.txt',
   tools: [],
   namespace: '02_BRAND',

@@ -18,7 +18,7 @@ const VIRTUAL_START = 100000; // ₹1,00,000 virtual capital
 
 const wolf = new Agent({
   name: '09-wolf',
-  model: 'deepseek/deepseek-r1',
+  model: 'google/gemini-2.5-pro',
   systemPromptPath: 'prompts/09-wolf.txt',
   tools: [],
   namespace: '09_WOLF',

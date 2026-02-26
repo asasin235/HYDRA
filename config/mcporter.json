@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "hydra": {
+      "command": "node",
+      "args": [
+        "/Users/hydra/Desktop/projects/HYDRA/mcp/hydra-mcp-server.js"
+      ],
+      "description": "HYDRA multi-agent MCP server"
+    }
+  },
+  "imports": []
+}

@@ -15,7 +15,7 @@ const STREAKS_FILE = path.join(BRAIN_PATH, 'brain', '07_BIOBOT', 'streaks.json')
 
 const biobot = new Agent({
   name: '07-biobot',
-  model: 'google/gemini-flash-3',
+  model: 'google/gemini-2.5-flash',
   systemPromptPath: 'prompts/07-biobot.txt',
   tools: [],
   namespace: '07_BIOBOT',
