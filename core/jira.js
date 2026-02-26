@@ -58,7 +58,7 @@ export async function getMyTickets({ statuses, maxResults = 20 } = {}) {
     : 'AND status IN ("To Do", "In Progress", "Open", "Reopened")';
 
   const jql = `assignee = currentUser() ${statusFilter} ORDER BY priority DESC, updated DESC`;
-  const data = await jiraFetch(`/search?jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&fields=summary,status,priority,assignee,created,updated`);
+  const data = await jiraFetch("/search/jql", { method: "POST", body: JSON.stringify({ jql, maxResults, fields: ["summary","status","priority","assignee","created","updated"] }) });
 
   return (data.issues || []).map(issue => ({
     key: issue.key,
