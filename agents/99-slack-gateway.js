@@ -90,18 +90,43 @@ async function logDrop(entry) {
   }
 }
 
-function getOrCreateAgent(name) {
+// Map of agent name → { module path, export name of the Agent instance }
+const AGENT_MODULE_MAP = {
+  '01-edmobot': { path: './01-edmobot.js', exportName: 'edmo' },
+};
+
+async function getOrCreateAgent(name) {
   if (agentRegistry.has(name)) return agentRegistry.get(name);
-  // Try .txt first (existing prompts), fall back to .md
+
+  // Try dynamic import to get the real agent instance (with tools)
+  const modInfo = AGENT_MODULE_MAP[name];
+  if (modInfo) {
+    try {
+      process.env.HYDRA_GATEWAY_IMPORT = '1';
+      const mod = await import(modInfo.path);
+      delete process.env.HYDRA_GATEWAY_IMPORT;
+      const agent = mod[modInfo.exportName];
+      if (agent && typeof agent.run === 'function') {
+        agentRegistry.set(name, agent);
+        return agent;
+      }
+    } catch (e) {
+      delete process.env.HYDRA_GATEWAY_IMPORT;
+      console.error(`[slack-gateway] dynamic import failed for ${name}:`, e.message);
+    }
+  }
+
+  // Fallback: bare agent with model from registry
+  const cfg = AGENTS[name] || {};
   const promptTxt = path.join('prompts', `${name}.txt`);
   const promptMd = path.join('prompts', `${name}.md`);
   const systemPromptPath = existsSync(promptTxt) ? promptTxt : promptMd;
   const agent = new Agent({
     name,
-    model: 'anthropic/claude-sonnet-4.6',
+    model: cfg.model || 'anthropic/claude-sonnet-4.6',
     systemPromptPath,
     tools: [],
-    namespace: name,
+    namespace: cfg.namespace || name,
     tokenBudget: 8000
   });
   agentRegistry.set(name, agent);
@@ -140,7 +165,7 @@ async function dispatch({ message, say, agentName = '00-architect', userText }) 
   }
   lastByUser.set(user, now);
 
-  const agent = getOrCreateAgent(agentName);
+  const agent = await getOrCreateAgent(agentName);
   await say({ thread_ts: message.ts, text: `🤖 *${agentName}* is thinking...` });
 
   const runPromise = agent.run(userText, `Slack user: <@${user}>`);
