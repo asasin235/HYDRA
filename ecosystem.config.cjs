@@ -48,13 +48,15 @@ function app(name) {
   return {
     name,
     script: `./agents/${name}.js`,
+    interpreter: '/opt/homebrew/bin/node',
     exec_mode: 'fork',
     autorestart: true,
     max_memory_restart: '512M',
     node_args: '--require dotenv/config',
     env: {
       NODE_ENV: 'production',
-      DOTENV_CONFIG_PATH: './.env'
+      DOTENV_CONFIG_PATH: './.env',
+      PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,
@@ -66,13 +68,15 @@ function script(name, scriptPath) {
   return {
     name,
     script: scriptPath,
+    interpreter: '/opt/homebrew/bin/node',
     exec_mode: 'fork',
     autorestart: true,
     max_memory_restart: '256M',
     node_args: '--require dotenv/config',
     env: {
       NODE_ENV: 'production',
-      DOTENV_CONFIG_PATH: './.env'
+      DOTENV_CONFIG_PATH: './.env',
+      PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,
