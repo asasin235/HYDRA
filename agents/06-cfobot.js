@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
-import { getDebt, setDebt } from '../core/db.js';
+import { getDebt, setDebt, getTransactions, getDailySpend, getSpendByCategory, getRecentTransactions } from '../core/db.js';
 
 validateEnv('06-cfobot');
 
@@ -72,13 +72,55 @@ function categorize(tx) {
 
 async function processNightly() {
   try {
+    const today = new Date().toISOString().split('T')[0];
+
+    // Primary: read from DB (populated by sms-reader.js)
+    const dbTransactions = getRecentTransactions(50);
+    const todaySpend = getSpendByCategory(today, today);
+
+    // Fallback: also check sms_inbox.json
     const inbox = await readSMSInbox();
     const labeled = inbox.map(categorize);
-    const totals = { essential: 0, discretionary: 0, impulse: 0 };
+
+    // Merge: prefer DB data, fall back to JSON
+    const hasDbData = dbTransactions.length > 0;
+
+    let totals = { essential: 0, discretionary: 0, impulse: 0 };
     let impulseHigh = [];
-    for (const t of labeled) {
-      totals[t.category] += t.amount;
-      if (t.category === 'impulse' && t.amount > 500) impulseHigh.push(t);
+    let txList = [];
+
+    if (hasDbData) {
+      // Use DB data — richer category breakdown
+      const catMap = {};
+      for (const row of todaySpend) {
+        catMap[row.category] = row.total;
+      }
+      totals = {
+        essential: (catMap.rent || 0) + (catMap.utilities || 0) + (catMap.medical || 0) + (catMap.education || 0),
+        discretionary: (catMap.food || 0) + (catMap.transport || 0) + (catMap.entertainment || 0),
+        impulse: (catMap.shopping || 0) + (catMap.big_spend || 0) + (catMap.tobacco || 0)
+      };
+
+      // Flag high impulse + tobacco
+      const todayTx = dbTransactions.filter(t => t.date === today && t.type === 'debit');
+      impulseHigh = todayTx.filter(t =>
+        (t.category === 'shopping' || t.category === 'big_spend' || t.category === 'tobacco') && t.amount > 500
+      );
+      txList = todayTx;
+
+      // Tobacco alert
+      const tobaccoTx = todayTx.filter(t => t.category === 'tobacco');
+      if (tobaccoTx.length > 0) {
+        const amt = tobaccoTx.reduce((s, t) => s + t.amount, 0);
+        await postSlack(`🚨 *TOBACCO ALERT*: ₹${amt.toFixed(0)} spent on cigarettes/weed today. This is going to the Wedding Fund tracker as lost money.`);
+      }
+    } else {
+      // Fallback to JSON
+      for (const t of labeled) {
+        totals[t.category] += t.amount;
+        if (t.category === 'impulse' && t.amount > 500) impulseHigh.push(t);
+      }
+      txList = labeled.slice(-10);
     }
 
     const summaryLines = [
@@ -87,16 +129,23 @@ async function processNightly() {
       `Impulse: ₹${totals.impulse.toFixed(0)}`
     ];
 
-    const ctx = [
-      'Categorized transactions (latest):',
-      ...labeled.slice(-10).map(t => `• [${t.category}] ₹${t.amount} — ${(t.merchant||'')} ${(t.text||'').slice(0,60)}`)
-    ].join('\n');
+    // Build context with category breakdown if from DB
+    const ctxLines = ['Categorized transactions (latest):'];
+    if (hasDbData && todaySpend.length > 0) {
+      ctxLines.push('Category breakdown:');
+      todaySpend.forEach(row => ctxLines.push(`  ${row.category}: ₹${row.total.toFixed(0)} (${row.count} txns)`));
+      ctxLines.push('');
+    }
+    ctxLines.push(...txList.slice(-10).map(t =>
+      `• [${t.category}] ₹${t.amount} — ${(t.merchant || '')} ${(t.raw_text || t.text || '').slice(0, 60)}`
+    ));
+    const ctx = ctxLines.join('\n');
 
     const message = await cfo.run('Summarize today\'s spending and propose actionable savings tips.', ctx);
     await postSlack(`*Spending Summary*\n${summaryLines.join('\n')}\n\n${message}`);
 
     if (impulseHigh.length) {
-      const details = impulseHigh.map(t => `₹${t.amount} ${(t.merchant||'')} ${(t.text||'').slice(0,50)}`).join('\n');
+      const details = impulseHigh.map(t => `₹${t.amount} ${(t.merchant || '')} ${(t.raw_text || t.text || '').slice(0, 50)}`).join('\n');
       await postSlack(`@here High impulse spends detected (>₹500):\n${details}`);
     }
   } catch (e) {

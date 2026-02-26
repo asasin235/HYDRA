@@ -59,10 +59,36 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    msg_id INTEGER UNIQUE,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    merchant TEXT DEFAULT '',
+    card TEXT DEFAULT '',
+    balance REAL,
+    bank TEXT DEFAULT '',
+    category TEXT DEFAULT 'other',
+    raw_text TEXT,
+    sender TEXT,
+    timestamp TEXT NOT NULL,
+    date TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sync_state (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_agent_state_agent ON agent_state(agent);
   CREATE INDEX IF NOT EXISTS idx_daily_logs_agent_date ON daily_logs(agent, date);
   CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades(symbol);
   CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
+  CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
+  CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category);
+  CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
 `);
 
 // Initialize debt_tracker row if not exists
@@ -140,6 +166,41 @@ const getLeadsStmt = db.prepare(`
 
 const updateLeadStmt = db.prepare(`
   UPDATE leads SET status = ? WHERE id = ?
+`);
+
+// Prepared statements for transactions
+const addTransactionStmt = db.prepare(`
+  INSERT OR IGNORE INTO transactions (msg_id, type, amount, merchant, card, balance, bank, category, raw_text, sender, timestamp, date)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const getTransactionsStmt = db.prepare(`
+  SELECT * FROM transactions WHERE date >= ? AND date <= ? ORDER BY timestamp DESC
+`);
+
+const getDailySpendStmt = db.prepare(`
+  SELECT date, category, SUM(amount) as total, COUNT(*) as count
+  FROM transactions WHERE type = 'debit' AND date >= ? AND date <= ?
+  GROUP BY date, category ORDER BY date DESC, total DESC
+`);
+
+const getSpendByCategoryStmt = db.prepare(`
+  SELECT category, SUM(amount) as total, COUNT(*) as count
+  FROM transactions WHERE type = 'debit' AND date >= ? AND date <= ?
+  GROUP BY category ORDER BY total DESC
+`);
+
+const getRecentTransactionsStmt = db.prepare(`
+  SELECT * FROM transactions ORDER BY timestamp DESC LIMIT ?
+`);
+
+const getSyncStateStmt = db.prepare(`
+  SELECT value FROM sync_state WHERE key = ?
+`);
+
+const setSyncStateStmt = db.prepare(`
+  INSERT OR REPLACE INTO sync_state (key, value, updated_at)
+  VALUES (?, ?, datetime('now'))
 `);
 
 /**
@@ -284,6 +345,76 @@ export function getLeads(status = 'new') {
  */
 export function updateLead(id, status) {
   updateLeadStmt.run(status, id);
+}
+
+/**
+ * Add a transaction from SMS
+ * @param {object} tx - Transaction object
+ */
+export function addTransaction(tx) {
+  addTransactionStmt.run(
+    tx.msg_id, tx.type, tx.amount, tx.merchant || '', tx.card || '',
+    tx.balance, tx.bank || '', tx.category || 'other',
+    tx.raw_text || '', tx.sender || '', tx.timestamp, tx.date
+  );
+}
+
+/**
+ * Get transactions in a date range
+ * @param {string} fromDate - Start date YYYY-MM-DD
+ * @param {string} toDate - End date YYYY-MM-DD
+ * @returns {Array}
+ */
+export function getTransactions(fromDate, toDate) {
+  return getTransactionsStmt.all(fromDate, toDate);
+}
+
+/**
+ * Get daily spending breakdown by category
+ * @param {string} fromDate - Start date YYYY-MM-DD
+ * @param {string} toDate - End date YYYY-MM-DD
+ * @returns {Array} {date, category, total, count}
+ */
+export function getDailySpend(fromDate, toDate) {
+  return getDailySpendStmt.all(fromDate, toDate);
+}
+
+/**
+ * Get spending totals by category in a date range
+ * @param {string} fromDate - Start date YYYY-MM-DD
+ * @param {string} toDate - End date YYYY-MM-DD
+ * @returns {Array} {category, total, count}
+ */
+export function getSpendByCategory(fromDate, toDate) {
+  return getSpendByCategoryStmt.all(fromDate, toDate);
+}
+
+/**
+ * Get recent transactions
+ * @param {number} limit - Max results
+ * @returns {Array}
+ */
+export function getRecentTransactions(limit = 20) {
+  return getRecentTransactionsStmt.all(limit);
+}
+
+/**
+ * Get last sync timestamp for a service
+ * @param {string} key - Service name
+ * @returns {string|null}
+ */
+export function getLastSyncTimestamp(key) {
+  const row = getSyncStateStmt.get(key);
+  return row ? row.value : null;
+}
+
+/**
+ * Set last sync timestamp for a service
+ * @param {string} key - Service name
+ * @param {string} value - ISO timestamp
+ */
+export function setLastSyncTimestamp(key, value) {
+  setSyncStateStmt.run(key, value);
 }
 
 /**
