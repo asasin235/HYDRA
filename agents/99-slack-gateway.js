@@ -7,6 +7,7 @@ import Agent from '../core/agent.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { getDebt, getState, setState } from '../core/db.js';
 import { appendBrain } from '../core/filesystem.js';
+import { AGENTS } from '../core/registry.js';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
@@ -48,6 +49,28 @@ const agentRegistry = new Map();
 // Dedup and rate limiting
 const processed = new Set(); // store last 1000 event IDs
 const lastByUser = new Map(); // user -> timestamp ms
+
+// Build channel-name → agent-name map from registry
+const channelToAgent = new Map();
+for (const [agentName, cfg] of Object.entries(AGENTS)) {
+  if (cfg.slackChannel) {
+    channelToAgent.set(cfg.slackChannel.replace('#', ''), agentName);
+  }
+}
+
+// Cache: channel ID → channel name (populated lazily)
+const channelIdToName = new Map();
+
+async function resolveChannelName(channelId) {
+  if (channelIdToName.has(channelId)) return channelIdToName.get(channelId);
+  try {
+    const res = await app.client.conversations.info({ channel: channelId });
+    const name = res.channel?.name || '';
+    channelIdToName.set(channelId, name);
+    return name;
+  } catch { return ''; }
+}
+
 
 function remember(id) {
   processed.add(id);
@@ -162,6 +185,27 @@ app.event('app_mention', async ({ event, say }) => {
   } catch (error) {
     console.error('[slack-gateway] app_mention error:', error.message);
     await say({ thread_ts: event.ts, text: `❌ Error: ${error.message}` });
+  }
+});
+
+// Channel routing: messages in agent channels (e.g. #06-cfobot) route to that agent
+app.message(async ({ message, say, next }) => {
+  // Skip DMs, bot messages, subtypes, and messages already handled by regex
+  if (message.channel_type === 'im' || message.subtype || message.bot_id) return;
+  if (/^\s*@?hydra\s+\S+\s+/i.test(message.text || '')) return;
+
+  const channelName = await resolveChannelName(message.channel);
+  const agentName = channelToAgent.get(channelName);
+  if (!agentName) return; // not an agent channel, ignore
+
+  const userText = (message.text || '').replace(/<@[A-Z0-9]+>/g, '').trim();
+  if (!userText) return;
+
+  try {
+    await dispatch({ message, say, agentName, userText });
+  } catch (error) {
+    console.error('[slack-gateway] channel route error:', error.message);
+    await say({ thread_ts: message.ts, text: `❌ Error: ${error.message}` });
   }
 });
 

@@ -127,14 +127,28 @@ app.get('/api/usage', async (req, res) => {
   }
 });
 
-// Health API proxy
+// Health API — reads PM2 process status directly (more reliable than shared port 3002)
 app.get('/api/health', async (req, res) => {
   try {
-    const r = await fetch('http://localhost:3002/health');
-    const data = await r.json();
-    res.json(data);
+    const { execSync } = await import('child_process');
+    const raw = execSync('pm2 jlist', { timeout: 5000 }).toString();
+    const list = JSON.parse(raw);
+    const health = {};
+    for (const proc of list) {
+      const name = proc.name;
+      if (name === 'dashboard') continue; // skip self
+      const env = proc.pm2_env || {};
+      health[name] = {
+        status: env.status === 'online' ? 'healthy' : env.status || 'unknown',
+        uptime: Math.floor((Date.now() - (env.pm_uptime || Date.now())) / 1000),
+        restarts: env.unstable_restarts || 0,
+        memory: Math.round((proc.monit?.memory || 0) / 1024 / 1024),
+        cpu: proc.monit?.cpu || 0
+      };
+    }
+    res.json(health);
   } catch (e) {
-    res.json({ error: 'Health endpoint unavailable' });
+    res.json({ error: e.message });
   }
 });
 
@@ -275,7 +289,7 @@ async function load() {
 
     tbody.innerHTML += '<tr>' +
       '<td><strong>' + name + '</strong></td>' +
-      '<td><span class="status ' + statusClass + '"></span>' + (h.status || 'unknown') + '</td>' +
+      '<td><span class="status ' + statusClass + '"></span>' + (h.status || 'unknown') + (h.memory ? ' (' + h.memory + 'MB)' : '') + '</td>' +
       '<td style="font-size:11px;color:#aaa">' + (a.model || '-').split('/').pop() + '</td>' +
       '<td class="tier-' + a.tier + '">T' + a.tier + '</td>' +
       '<td>' + (a.tokensToday || 0).toLocaleString() + '</td>' +
