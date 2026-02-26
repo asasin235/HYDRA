@@ -189,7 +189,7 @@ app.event('app_mention', async ({ event, say }) => {
 });
 
 // Channel routing: messages in agent channels (e.g. #06-cfobot) route to that agent
-app.message(async ({ message, say, next }) => {
+app.message(async ({ message, say }) => {
   // Skip DMs, bot messages, subtypes, and messages already handled by regex
   if (message.channel_type === 'im' || message.subtype || message.bot_id) return;
   if (/^\s*@?hydra\s+\S+\s+/i.test(message.text || '')) return;
