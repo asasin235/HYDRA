@@ -23,6 +23,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs-extra';
 import path from 'path';
 import { addTransaction, getLastSyncTimestamp, setLastSyncTimestamp } from '../core/db.js';
+import { addMemory } from '../core/memory.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -307,6 +308,36 @@ async function syncMessages() {
     }
 
     console.log(`[sms-reader] 🧠 Stored ${stored} new transactions in DB`);
+
+    // Ingest into LanceDB for semantic search by CFO bot
+    if (stored > 0) {
+      try {
+        const debitsForLance = transactions.filter(t => t.type === 'debit');
+        const creditsForLance = transactions.filter(t => t.type === 'credit');
+        const totalD = debitsForLance.reduce((s, t) => s + t.amount, 0);
+        const totalC = creditsForLance.reduce((s, t) => s + t.amount, 0);
+
+        const catSummary = {};
+        for (const t of debitsForLance) {
+          catSummary[t.category] = (catSummary[t.category] || 0) + t.amount;
+        }
+        const catLines = Object.entries(catSummary)
+          .sort((a, b) => b[1] - a[1])
+          .map(([c, a]) => `${c}: ₹${a.toFixed(0)}`)
+          .join(', ');
+
+        const topTx = transactions.slice(0, 15)
+          .map(t => `${t.type === 'debit' ? 'SPENT' : 'RECEIVED'} ₹${t.amount} ${t.bank} ${t.merchant || ''} [${t.category}] ${t.date}`)
+          .join('\n');
+
+        const memoryContent = `Financial transactions sync ${new Date().toISOString().split('T')[0]}: ${stored} new transactions. Debits: ₹${totalD.toFixed(0)} (${debitsForLance.length} txns), Credits: ₹${totalC.toFixed(0)} (${creditsForLance.length} txns). Categories: ${catLines}.\n\nRecent transactions:\n${topTx}`;
+
+        await addMemory('06-cfobot', memoryContent);
+        console.log(`[sms-reader] 🧠 Ingested transaction summary into LanceDB`);
+      } catch (e) {
+        console.warn(`[sms-reader] ⚠️ LanceDB ingestion failed (non-fatal): ${e.message}`);
+      }
+    }
 
     // Also write to sms_inbox.json for backward compat with existing CFO bot
     await writeSMSInbox(transactions);
