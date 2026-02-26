@@ -90,44 +90,119 @@ async function logDrop(entry) {
   }
 }
 
-// Map of agent name → { module path, export name of the Agent instance }
-const AGENT_MODULE_MAP = {
-  '01-edmobot': { path: './01-edmobot.js', exportName: 'edmo' },
+// Edmobot tools — defined here so the gateway can create an edmobot Agent with
+// full Jira/GitHub capabilities without importing the edmobot module (which
+// registers SIGTERM handlers, crons, and a health server that conflict with the gateway).
+import {
+  isJiraConfigured, getMyTickets, getTicketDetails,
+  transitionTicket, addJiraComment
+} from '../core/jira.js';
+import {
+  isGitHubConfigured, getFileContent, searchCode, listFiles
+} from '../core/github.js';
+
+const EDMOBOT_TOOLS = [
+  {
+    name: 'list_my_tickets',
+    description: 'List all Jira tickets assigned to Aatif. Shows key, status, priority, and summary.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      if (!isJiraConfigured()) return 'Jira not configured.';
+      const tickets = await getMyTickets();
+      if (tickets.length === 0) return 'No tickets assigned to you.';
+      return tickets.map(t => `${t.key} [${t.status}] ${t.priority || ''} — ${t.summary}`).join('\n');
+    }
+  },
+  {
+    name: 'get_ticket_details',
+    description: 'Get full details of a specific Jira ticket including description, comments, and labels.',
+    parameters: { type: 'object', properties: { ticket_key: { type: 'string', description: 'Jira ticket key, e.g. EP-366' } }, required: ['ticket_key'] },
+    execute: async ({ ticket_key }) => {
+      if (!isJiraConfigured()) return 'Jira not configured.';
+      const t = await getTicketDetails(ticket_key);
+      let result = `**${t.key}: ${t.summary}**\nStatus: ${t.status} | Priority: ${t.priority}\n`;
+      if (t.labels?.length) result += `Labels: ${t.labels.join(', ')}\n`;
+      if (t.description) result += `\nDescription:\n${t.description}\n`;
+      if (t.comments?.length) {
+        result += `\nRecent comments:\n`;
+        t.comments.forEach(c => { result += `- ${c.author} (${c.created.split('T')[0]}): ${c.body.slice(0, 200)}\n`; });
+      }
+      return result;
+    }
+  },
+  {
+    name: 'update_ticket_status',
+    description: 'Transition a Jira ticket to a new status.',
+    parameters: { type: 'object', properties: { ticket_key: { type: 'string' }, status: { type: 'string' } }, required: ['ticket_key', 'status'] },
+    execute: async ({ ticket_key, status }) => {
+      if (!isJiraConfigured()) return 'Jira not configured.';
+      await transitionTicket(ticket_key, status);
+      return `✅ ${ticket_key} transitioned to "${status}"`;
+    }
+  },
+  {
+    name: 'comment_on_ticket',
+    description: 'Add a comment to a Jira ticket.',
+    parameters: { type: 'object', properties: { ticket_key: { type: 'string' }, comment: { type: 'string' } }, required: ['ticket_key', 'comment'] },
+    execute: async ({ ticket_key, comment }) => {
+      if (!isJiraConfigured()) return 'Jira not configured.';
+      await addJiraComment(ticket_key, comment);
+      return `✅ Comment added to ${ticket_key}`;
+    }
+  },
+  {
+    name: 'search_repo_code',
+    description: 'Search for code patterns in a GitHub repository.',
+    parameters: { type: 'object', properties: { repo: { type: 'string' }, query: { type: 'string' } }, required: ['repo', 'query'] },
+    execute: async ({ repo, query }) => {
+      if (!isGitHubConfigured()) return 'GitHub not configured.';
+      const results = await searchCode(repo, query);
+      if (results.length === 0) return `No results for "${query}" in ${repo}`;
+      return results.map(r => r.path).join('\n');
+    }
+  },
+  {
+    name: 'read_repo_file',
+    description: 'Read a file from a GitHub repository.',
+    parameters: { type: 'object', properties: { repo: { type: 'string' }, file_path: { type: 'string' }, branch: { type: 'string' } }, required: ['repo', 'file_path'] },
+    execute: async ({ repo, file_path, branch }) => {
+      if (!isGitHubConfigured()) return 'GitHub not configured.';
+      const file = await getFileContent(repo, file_path, branch);
+      return `File: ${file.path}\n\`\`\`\n${file.content.slice(0, 8000)}\n\`\`\``;
+    }
+  },
+  {
+    name: 'list_repo_files',
+    description: 'List files and directories in a repository path.',
+    parameters: { type: 'object', properties: { repo: { type: 'string' }, directory: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'] },
+    execute: async ({ repo, directory, branch }) => {
+      if (!isGitHubConfigured()) return 'GitHub not configured.';
+      const files = await listFiles(repo, directory, branch);
+      return files.map(f => `${f.type === 'dir' ? '📁' : '📄'} ${f.path}`).join('\n');
+    }
+  }
+];
+
+// Tool map for agents that need tools when created by the gateway
+const AGENT_TOOLS = {
+  '01-edmobot': EDMOBOT_TOOLS
 };
 
 async function getOrCreateAgent(name) {
   if (agentRegistry.has(name)) return agentRegistry.get(name);
 
-  // Try dynamic import to get the real agent instance (with tools)
-  const modInfo = AGENT_MODULE_MAP[name];
-  if (modInfo) {
-    try {
-      process.env.HYDRA_GATEWAY_IMPORT = '1';
-      const mod = await import(modInfo.path);
-      delete process.env.HYDRA_GATEWAY_IMPORT;
-      const agent = mod[modInfo.exportName];
-      if (agent && typeof agent.run === 'function') {
-        agentRegistry.set(name, agent);
-        return agent;
-      }
-    } catch (e) {
-      delete process.env.HYDRA_GATEWAY_IMPORT;
-      console.error(`[slack-gateway] dynamic import failed for ${name}:`, e.message);
-    }
-  }
-
-  // Fallback: bare agent with model from registry
   const cfg = AGENTS[name] || {};
   const promptTxt = path.join('prompts', `${name}.txt`);
   const promptMd = path.join('prompts', `${name}.md`);
   const systemPromptPath = existsSync(promptTxt) ? promptTxt : promptMd;
+  const tools = AGENT_TOOLS[name] || [];
   const agent = new Agent({
     name,
     model: cfg.model || 'anthropic/claude-sonnet-4.6',
     systemPromptPath,
-    tools: [],
+    tools,
     namespace: cfg.namespace || name,
-    tokenBudget: 8000
+    tokenBudget: tools.length > 0 ? 300000 : 8000
   });
   agentRegistry.set(name, agent);
   return agent;

@@ -27,7 +27,7 @@ import {
   createBranch, createPR, searchCode, listFiles, GITHUB_USERNAME
 } from '../core/github.js';
 
-if (!process.env.HYDRA_GATEWAY_IMPORT) validateEnv('01-edmobot');
+validateEnv('01-edmobot');
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#01-edmobot';
@@ -356,9 +356,7 @@ Always make the smallest possible change. Never rewrite entire files unless nece
   }
 }
 
-// ── Cron Jobs (skipped when imported by gateway to avoid duplicates) ──────────
-
-if (!process.env.HYDRA_GATEWAY_IMPORT) {
+// ── Cron Jobs ─────────────────────────────────────────────────────────────────
 
 // Every 2 hours on weekdays: check for assigned tickets
 cron.schedule('0 */2 * * 1-5', async () => {
@@ -415,8 +413,6 @@ cron.schedule('0 17 * * 5', async () => {
     console.error('[01-edmobot] weekly summary failed:', e.message);
   }
 }, { timezone: process.env.TZ || 'Asia/Kolkata' });
-
-} // end if (!HYDRA_GATEWAY_IMPORT)
 
 // ── Exports for Slack Gateway ─────────────────────────────────────────────────
 
