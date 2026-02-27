@@ -6,32 +6,39 @@
  * scripts/plaud-sync.js — Plaud AI + Local Folder → Whisper → Summary → LanceDB
  *
  * Two modes:
- *   API mode  — polls Plaud REST API (needs PLAUD_API_KEY)
- *   Watch mode — watches audio_inbox/ for dropped .mp3/.m4a/.wav files
+ *   API mode  — polls Plaud internal web API (needs PLAUD_TOKEN + PLAUD_API_DOMAIN)
+ *   Watch mode — watches audio_inbox/ for dropped .mp3/.m4a/.wav/.opus files
  *
  * Transcription backends (tried in order):
- *   1. Groq Whisper (GROQ_API_KEY — free at console.groq.com)
- *   2. OpenAI Whisper (OPENAI_API_KEY)
- *   3. Plaud API built-in transcript (API mode only)
+ *   1. whisper-cpp (local, free, fast on Apple Silicon)
+ *   2. Groq Whisper (GROQ_API_KEY — free at console.groq.com)
+ *   3. OpenAI Whisper (OPENAI_API_KEY)
  *
  * After transcription, summarizes via OpenRouter and ingests into LanceDB.
  *
  * Usage:
- *   node scripts/plaud-sync.js           # API mode (needs PLAUD_API_KEY)
+ *   node scripts/plaud-sync.js           # API mode (needs PLAUD_TOKEN + PLAUD_API_DOMAIN)
  *   node scripts/plaud-sync.js --watch   # Watch mode (audio_inbox folder)
- *   node scripts/plaud-sync.js --test    # Test API connection
+ *   node scripts/plaud-sync.js --test    # Test API connection or whisper-cpp
  */
 import fs from 'fs-extra';
 import path from 'path';
+import { execSync } from 'child_process';
 import { detectTags, wrapWithFrontmatter } from './audio-tagger.js';
 import { addAudioTranscript } from '../core/memory.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const PLAUD_API_KEY = process.env.PLAUD_API_KEY;
+const PLAUD_TOKEN = process.env.PLAUD_TOKEN;
+const PLAUD_API_DOMAIN = process.env.PLAUD_API_DOMAIN;
+const PLAUD_API_KEY = process.env.PLAUD_API_KEY; // legacy fallback
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+const WHISPER_CPP_PATH = process.env.WHISPER_CPP_PATH || '/opt/homebrew/bin/whisper-cli';
+const WHISPER_MODEL_PATH = (process.env.WHISPER_MODEL_PATH || '~/.local/share/whisper-cpp/models/ggml-base.en.bin')
+    .replace(/^~/, process.env.HOME);
 
 const BRAIN_PATH = (process.env.BRAIN_PATH || '~/hydra-brain')
     .replace(/^~/, process.env.HOME);
@@ -42,13 +49,13 @@ const STATE_DIR = path.join(BRAIN_PATH, 'brain', 'plaud');
 const STATE_FILE = path.join(STATE_DIR, 'processed_ids.json');
 const TEMP_DIR = path.join(STATE_DIR, 'tmp');
 
-const PLAUD_BASE_URL = 'https://api.plaud.ai';
-const POLL_INTERVAL = Number(process.env.PLAUD_POLL_INTERVAL || 300000); // 5 min
+const HAS_PLAUD_API = !!(PLAUD_TOKEN && PLAUD_API_DOMAIN) || !!PLAUD_API_KEY;
+const POLL_INTERVAL = Number(process.env.PLAUD_POLL_INTERVAL || 1800000); // 30 min
 const WATCH_INTERVAL = Number(process.env.AUDIO_POLL_INTERVAL || 60000); // 1 min
 const SUMMARY_MODEL = 'google/gemini-2.5-flash';
 
-const WATCH_MODE = process.argv.includes('--watch') || !PLAUD_API_KEY;
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.wav', '.ogg', '.webm']);
+const WATCH_MODE = process.argv.includes('--watch') || !HAS_PLAUD_API;
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.wav', '.ogg', '.webm', '.opus']);
 
 // ── State Management ──────────────────────────────────────────────────────────
 
@@ -70,38 +77,50 @@ async function saveProcessedIds(ids) {
     await fs.writeJson(STATE_FILE, { ids: [...ids], lastUpdated: new Date().toISOString() }, { spaces: 2 });
 }
 
-// ── Plaud API ─────────────────────────────────────────────────────────────────
+// ── Plaud API (internal web API + legacy fallback) ────────────────────────────
+
+function plaudHeaders() {
+    if (PLAUD_TOKEN) {
+        const auth = PLAUD_TOKEN.startsWith('bearer ') ? PLAUD_TOKEN : `bearer ${PLAUD_TOKEN}`;
+        return { 'Authorization': auth, 'Content-Type': 'application/json' };
+    }
+    if (PLAUD_API_KEY) {
+        return { 'Authorization': `Bearer ${PLAUD_API_KEY}` };
+    }
+    throw new Error('No Plaud credentials. Set PLAUD_TOKEN + PLAUD_API_DOMAIN in .env');
+}
+
+function plaudBaseUrl() {
+    if (PLAUD_TOKEN && PLAUD_API_DOMAIN) return PLAUD_API_DOMAIN.replace(/\/$/, '');
+    return 'https://api.plaud.ai';
+}
 
 async function fetchPlaudRecordings() {
-    if (!PLAUD_API_KEY) throw new Error('PLAUD_API_KEY not set');
+    const headers = plaudHeaders();
+    const base = plaudBaseUrl();
+    const useInternal = !!(PLAUD_TOKEN && PLAUD_API_DOMAIN);
+    const url = useInternal ? `${base}/file/simple/web` : `${base}/files`;
 
-    const res = await fetch(`${PLAUD_BASE_URL}/files`, {
-        headers: { 'Authorization': `Bearer ${PLAUD_API_KEY}` }
-    });
-
+    const res = await fetch(url, { headers });
     if (!res.ok) {
         const body = await res.text();
-        throw new Error(`Plaud API /files error ${res.status}: ${body}`);
+        throw new Error(`Plaud API ${url} error ${res.status}: ${body}`);
     }
 
     const data = await res.json();
-    const files = Array.isArray(data) ? data : (data.files || data.data || []);
-    return files.filter(f => f.status === 'completed');
+    const files = Array.isArray(data) ? data : (data.files || data.data || data.list || []);
+    // Internal API may not have 'status' — include all; legacy filters by completed
+    return useInternal ? files : files.filter(f => f.status === 'completed');
 }
 
-async function fetchPlaudFileDetails(fileId) {
-    const res = await fetch(`${PLAUD_BASE_URL}/files/${fileId}`, {
-        headers: { 'Authorization': `Bearer ${PLAUD_API_KEY}` }
-    });
-    if (!res.ok) return null;
-    return res.json();
-}
+async function downloadPlaudAudio(fileId, destPath) {
+    const headers = plaudHeaders();
+    const base = plaudBaseUrl();
+    const useInternal = !!(PLAUD_TOKEN && PLAUD_API_DOMAIN);
+    const url = useInternal ? `${base}/file/download/${fileId}` : `${base}/files/${fileId}/download`;
 
-// ── Download ──────────────────────────────────────────────────────────────────
-
-async function downloadAudio(presignedUrl, destPath) {
-    const res = await fetch(presignedUrl);
-    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+    const res = await fetch(url, { headers, redirect: 'follow' });
+    if (!res.ok) throw new Error(`Download failed for ${fileId}: ${res.status}`);
     const buffer = Buffer.from(await res.arrayBuffer());
     await fs.writeFile(destPath, buffer);
     return destPath;
@@ -109,10 +128,42 @@ async function downloadAudio(presignedUrl, destPath) {
 
 // ── Whisper Transcription (multi-backend) ─────────────────────────────────────
 
+async function transcribeWithWhisperCpp(audioPath) {
+    if (!await fs.pathExists(WHISPER_CPP_PATH)) throw new Error(`whisper-cli not found at ${WHISPER_CPP_PATH}`);
+    if (!await fs.pathExists(WHISPER_MODEL_PATH)) throw new Error(`Whisper model not found at ${WHISPER_MODEL_PATH}`);
+
+    // whisper-cli needs 16kHz WAV — convert with ffmpeg first
+    const wavPath = audioPath.replace(/\.[^.]+$/, '.wav');
+    const needsConvert = !audioPath.endsWith('.wav');
+    if (needsConvert) {
+        execSync(`ffmpeg -y -i "${audioPath}" -ar 16000 -ac 1 -c:a pcm_s16le "${wavPath}" 2>/dev/null`, { timeout: 120000 });
+    }
+
+    try {
+        const result = execSync(
+            `"${WHISPER_CPP_PATH}" -m "${WHISPER_MODEL_PATH}" -f "${needsConvert ? wavPath : audioPath}" --no-timestamps -t 4 2>/dev/null`,
+            { timeout: 300000, maxBuffer: 10 * 1024 * 1024 }
+        ).toString().trim();
+
+        if (!result) throw new Error('whisper-cpp produced empty output');
+        return result;
+    } finally {
+        if (needsConvert) await fs.remove(wavPath).catch(() => {});
+    }
+}
+
 async function transcribeAudio(audioPath) {
     const fileName = path.basename(audioPath);
 
-    // 1. Try Groq Whisper (free, fast)
+    // 1. Try local whisper-cpp (free, fast on Apple Silicon)
+    try {
+        console.log(`[plaud-sync] 🎙️  Transcribing via whisper-cpp (local): ${fileName}`);
+        return await transcribeWithWhisperCpp(audioPath);
+    } catch (e) {
+        console.warn(`[plaud-sync] ⚠️  whisper-cpp failed: ${e.message}`);
+    }
+
+    // 2. Try Groq Whisper (free cloud fallback)
     if (GROQ_API_KEY) {
         try {
             console.log(`[plaud-sync] 🎙️  Transcribing via Groq Whisper: ${fileName}`);
@@ -122,7 +173,7 @@ async function transcribeAudio(audioPath) {
         }
     }
 
-    // 2. Try OpenAI Whisper
+    // 3. Try OpenAI Whisper
     if (OPENAI_API_KEY) {
         try {
             console.log(`[plaud-sync] 🎙️  Transcribing via OpenAI Whisper: ${fileName}`);
@@ -132,7 +183,7 @@ async function transcribeAudio(audioPath) {
         }
     }
 
-    throw new Error('No transcription backend available. Set GROQ_API_KEY (free at console.groq.com) or OPENAI_API_KEY.');
+    throw new Error('No transcription backend available. Install whisper-cpp or set GROQ_API_KEY / OPENAI_API_KEY.');
 }
 
 async function transcribeWithAPI(audioPath, apiUrl, apiKey, model) {
@@ -275,43 +326,45 @@ function buildFilename(recording) {
 // ── Process Single Recording (API mode) ───────────────────────────────────────
 
 async function processRecording(recording, processedIds) {
+    const recordingId = recording.id || recording.file_id || recording.fileId;
     const baseName = buildFilename(recording);
-    const mp3Name = `${baseName}.mp3`;
+    const ext = recording.format || 'mp3';
+    const audioName = `${baseName}.${ext}`;
     const mdName = `${baseName}.md`;
-    const tempAudioPath = path.join(TEMP_DIR, mp3Name);
+    const tempAudioPath = path.join(TEMP_DIR, audioName);
 
-    console.log(`[plaud-sync] 📥 Processing: ${recording.name || recording.id}`);
+    console.log(`[plaud-sync] 📥 Processing: ${recording.name || recordingId}`);
 
     try {
-        // 1. Download audio
-        if (!recording.presigned_url) {
-            const details = await fetchPlaudFileDetails(recording.id);
-            if (!details?.presigned_url) {
-                console.error(`[plaud-sync] No presigned_url for ${recording.id}, skipping`);
-                return;
-            }
-            recording = { ...recording, ...details };
-        }
-
+        // 1. Download audio via internal web API or presigned URL
         await fs.ensureDir(TEMP_DIR);
-        await downloadAudio(recording.presigned_url, tempAudioPath);
-        console.log(`[plaud-sync] ⬇️  Downloaded: ${mp3Name}`);
+        if (PLAUD_TOKEN && PLAUD_API_DOMAIN) {
+            await downloadPlaudAudio(recordingId, tempAudioPath);
+        } else if (recording.presigned_url) {
+            const res = await fetch(recording.presigned_url);
+            if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+            await fs.writeFile(tempAudioPath, Buffer.from(await res.arrayBuffer()));
+        } else {
+            console.error(`[plaud-sync] No download method for ${recordingId}, skipping`);
+            return;
+        }
+        console.log(`[plaud-sync] ⬇️  Downloaded: ${audioName}`);
 
-        // 2. Transcribe (multi-backend)
+        // 2. Transcribe (whisper-cpp → Groq → OpenAI)
         let transcript;
         try {
             transcript = await transcribeAudio(tempAudioPath);
             console.log(`[plaud-sync] ✅ Transcript: ${transcript.length} chars`);
         } catch (whisperErr) {
-            console.warn(`[plaud-sync] ⚠️  Whisper failed: ${whisperErr.message}`);
-            // Fallback: Plaud API's built-in transcript
-            const details = recording.ai_data || (await fetchPlaudFileDetails(recording.id))?.ai_data;
-            transcript = details?.transcript || details?.summary || '';
-            if (!transcript) {
-                console.error(`[plaud-sync] No transcript available for ${recording.id}, skipping`);
+            console.warn(`[plaud-sync] ⚠️  All transcription failed: ${whisperErr.message}`);
+            // Last resort: check if Plaud response included a transcript
+            const builtIn = recording.ai_data?.transcript || recording.transcript || '';
+            if (!builtIn) {
+                console.error(`[plaud-sync] No transcript for ${recordingId}, skipping`);
                 return;
             }
-            console.log(`[plaud-sync] 📄 Using Plaud transcript: ${transcript.length} chars`);
+            transcript = builtIn;
+            console.log(`[plaud-sync] 📄 Using Plaud built-in transcript: ${transcript.length} chars`);
         }
 
         // 3. Summarize via OpenRouter
@@ -322,7 +375,7 @@ async function processRecording(recording, processedIds) {
         const todayStr = new Date().toISOString().split('T')[0];
         const markdown = wrapWithFrontmatter(summary, {
             source: 'plaud-note',
-            file: mp3Name,
+            file: audioName,
             tags,
             agents,
             date: todayStr
@@ -334,22 +387,22 @@ async function processRecording(recording, processedIds) {
         await fs.writeFile(mdPath, markdown, 'utf-8');
 
         // 6. Move audio to inbox
-        await fs.move(tempAudioPath, path.join(AUDIO_INBOX, mp3Name), { overwrite: true });
-        console.log(`[plaud-sync] 📂 Saved to audio_inbox: ${mp3Name} + ${mdName}`);
+        await fs.move(tempAudioPath, path.join(AUDIO_INBOX, audioName), { overwrite: true });
+        console.log(`[plaud-sync] 📂 Saved to audio_inbox: ${audioName} + ${mdName}`);
 
         // 7. Ingest into LanceDB directly
-        await ingestToLanceDB(transcript, summary, mp3Name, tags);
+        await ingestToLanceDB(transcript, summary, audioName, tags);
 
         // 8. Also append to shared_context for ingest-context.js
-        await saveToSharedContext(summary, mp3Name, tags);
+        await saveToSharedContext(summary, audioName, tags);
 
         // 9. Mark as processed
-        processedIds.add(recording.id);
+        processedIds.add(recordingId);
         await saveProcessedIds(processedIds);
 
-        console.log(`[plaud-sync] ✅ Done: ${recording.name || recording.id}`);
+        console.log(`[plaud-sync] ✅ Done: ${recording.name || recordingId}`);
     } catch (e) {
-        console.error(`[plaud-sync] ❌ Failed: ${recording.name || recording.id}: ${e.message}`);
+        console.error(`[plaud-sync] ❌ Failed: ${recording.name || recordingId}: ${e.message}`);
         await fs.remove(tempAudioPath).catch(() => { });
     }
 }
@@ -419,7 +472,10 @@ async function pollPlaudAPI() {
     try {
         const processedIds = await loadProcessedIds();
         const recordings = await fetchPlaudRecordings();
-        const newRecordings = recordings.filter(r => !processedIds.has(r.id));
+        const newRecordings = recordings.filter(r => {
+            const rid = r.id || r.file_id || r.fileId;
+            return rid && !processedIds.has(rid);
+        });
 
         if (newRecordings.length === 0) {
             console.log(`[plaud-sync] No new recordings (${recordings.length} total, ${processedIds.size} processed)`);
@@ -431,7 +487,7 @@ async function pollPlaudAPI() {
             try {
                 await processRecording(recording, processedIds);
             } catch (e) {
-                console.error(`[plaud-sync] ❌ Uncaught error for ${recording.id}: ${e.message}`);
+                console.error(`[plaud-sync] ❌ Uncaught error for ${recording.id || recording.file_id}: ${e.message}`);
             }
         }
     } catch (e) {
@@ -468,12 +524,13 @@ async function pollLocalFolder() {
 
 function printConfig() {
     console.log('[plaud-sync] Starting Plaud audio sync service');
-    console.log(`[plaud-sync] Mode: ${WATCH_MODE ? 'WATCH (local folder)' : 'API (Plaud REST)'}`);
+    console.log(`[plaud-sync] Mode: ${WATCH_MODE ? 'WATCH (local folder)' : 'API (Plaud ' + (PLAUD_TOKEN ? 'internal web API' : 'legacy REST') + ')'}`);
     console.log(`[plaud-sync] Audio inbox: ${AUDIO_INBOX}`);
-    console.log(`[plaud-sync] Transcription: ${GROQ_API_KEY ? 'Groq Whisper' : OPENAI_API_KEY ? 'OpenAI Whisper' : '⚠️  NONE — set GROQ_API_KEY (free) or OPENAI_API_KEY'}`);
+    const whisperLocal = fs.pathExistsSync(WHISPER_CPP_PATH) && fs.pathExistsSync(WHISPER_MODEL_PATH);
+    console.log(`[plaud-sync] Transcription: ${whisperLocal ? 'whisper-cpp (local)' : GROQ_API_KEY ? 'Groq Whisper' : OPENAI_API_KEY ? 'OpenAI Whisper' : '⚠️  NONE'}`);
     console.log(`[plaud-sync] Summarization: ${OPENROUTER_API_KEY ? 'OpenRouter (' + SUMMARY_MODEL + ')' : '⚠️  NONE'}`);
     if (!WATCH_MODE) {
-        console.log(`[plaud-sync] Poll interval: ${POLL_INTERVAL / 1000}s`);
+        console.log(`[plaud-sync] Poll interval: ${POLL_INTERVAL / 1000}s (${(POLL_INTERVAL / 60000).toFixed(0)} min)`);
     } else {
         console.log(`[plaud-sync] Watch interval: ${WATCH_INTERVAL / 1000}s`);
     }
@@ -482,11 +539,13 @@ function printConfig() {
 function validateConfig() {
     const issues = [];
 
-    if (!WATCH_MODE && !PLAUD_API_KEY) {
-        issues.push('PLAUD_API_KEY is required for API mode');
+    if (!WATCH_MODE && !HAS_PLAUD_API) {
+        issues.push('PLAUD_TOKEN + PLAUD_API_DOMAIN required for API mode (or legacy PLAUD_API_KEY)');
     }
-    if (!GROQ_API_KEY && !OPENAI_API_KEY) {
-        issues.push('No transcription backend: set GROQ_API_KEY (free at console.groq.com) or OPENAI_API_KEY');
+
+    const hasWhisperCpp = fs.pathExistsSync(WHISPER_CPP_PATH) && fs.pathExistsSync(WHISPER_MODEL_PATH);
+    if (!hasWhisperCpp && !GROQ_API_KEY && !OPENAI_API_KEY) {
+        issues.push('No transcription backend: install whisper-cpp, or set GROQ_API_KEY / OPENAI_API_KEY');
     }
     if (!OPENROUTER_API_KEY) {
         issues.push('OPENROUTER_API_KEY recommended (summarization disabled without it)');
@@ -497,18 +556,17 @@ function validateConfig() {
         issues.forEach(i => console.warn(`  - ${i}`));
     }
 
-    // In API mode, PLAUD_API_KEY is required
-    if (!WATCH_MODE && !PLAUD_API_KEY) {
-        console.error('[plaud-sync] PLAUD_API_KEY is required for API mode. Use --watch for local folder mode.');
+    if (!WATCH_MODE && !HAS_PLAUD_API) {
+        console.error('[plaud-sync] No Plaud credentials for API mode. Set PLAUD_TOKEN + PLAUD_API_DOMAIN, or use --watch.');
         process.exit(1);
     }
 
-    if (!GROQ_API_KEY && !OPENAI_API_KEY) {
+    if (!hasWhisperCpp && !GROQ_API_KEY && !OPENAI_API_KEY) {
         if (!WATCH_MODE) {
-            console.error("[plaud-sync] No transcription key. Set GROQ_API_KEY (free) or OPENAI_API_KEY.");
+            console.error('[plaud-sync] No transcription backend. Install whisper-cpp or set GROQ_API_KEY / OPENAI_API_KEY.');
             process.exit(1);
         }
-        console.warn("[plaud-sync] No transcription key — will skip files. Get free key at console.groq.com");
+        console.warn('[plaud-sync] No transcription backend — will skip files.');
     }
 }
 
@@ -519,7 +577,12 @@ validateConfig();
 
 if (process.argv.includes('--test')) {
     console.log('[plaud-sync] Running in --test mode...');
-    if (PLAUD_API_KEY) {
+    // Test whisper-cpp
+    const hasWhisper = fs.pathExistsSync(WHISPER_CPP_PATH) && fs.pathExistsSync(WHISPER_MODEL_PATH);
+    console.log(`[plaud-sync] whisper-cpp: ${hasWhisper ? '✅ ready' : '❌ not found'}`);
+    if (hasWhisper) console.log(`[plaud-sync]   binary: ${WHISPER_CPP_PATH}\n[plaud-sync]   model: ${WHISPER_MODEL_PATH}`);
+    // Test Plaud API
+    if (HAS_PLAUD_API) {
         fetchPlaudRecordings().then(recs => {
             console.log(`[plaud-sync] ✅ Plaud API: ${recs.length} recordings found`);
             process.exit(0);
@@ -536,6 +599,7 @@ if (process.argv.includes('--test')) {
     pollLocalFolder();
     setInterval(pollLocalFolder, WATCH_INTERVAL);
 } else {
+    console.log(`[plaud-sync] 🔄 Polling Plaud API every ${(POLL_INTERVAL / 60000).toFixed(0)} min...`);
     pollPlaudAPI();
     setInterval(pollPlaudAPI, POLL_INTERVAL);
 }
