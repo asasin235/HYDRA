@@ -280,7 +280,28 @@ const GW_SENSOR_MAP = {
   humidity: process.env.HA_HUMIDITY_SENSOR || 'sensor.temperature_and_humidity_sensor_humidity',
 };
 
+
+// Fuzzy device key resolver: handles aliases like "my fan" → "fan", "bedroom light" → "aatif_yellow"
+function resolveDeviceKey(input) {
+  if (!input) return input;
+  const key = input.toLowerCase().replace(/[\s-]+/g, '_').replace(/['"]/g, '');
+  if (GW_DEVICE_MAP[key]) return key;
+  // Common aliases
+  const aliases = {
+    'my_fan': 'fan', 'my_ac': 'aatif_ac', 'my_light': 'aatif_yellow', 'my_tubelight': 'aatif_tubelight',
+    'bedroom_fan': 'fan', 'bedroom_ac': 'aatif_ac', 'bedroom_light': 'aatif_yellow',
+    'aatif_fan': 'fan', 'ac': 'aatif_ac', 'the_fan': 'fan', 'room_fan': 'fan',
+    'living_room_light': 'light_strip', 'strip': 'light_strip', 'led': 'light_strip',
+    'water_heater': 'geyser', 'heater': 'geyser', 'xbox': 'xbox_light',
+  };
+  if (aliases[key]) return aliases[key];
+  // Partial match: find first device key containing the input
+  const match = Object.keys(GW_DEVICE_MAP).find(k => k.includes(key) || key.includes(k));
+  return match || key;
+}
+
 async function gwControlDevice(deviceKey, action, value) {
+  deviceKey = resolveDeviceKey(deviceKey);
   const d = GW_DEVICE_MAP[deviceKey];
   if (!d) return `Unknown device: ${deviceKey}. Available: ${Object.keys(GW_DEVICE_MAP).join(', ')}`;
   let service, payload;
