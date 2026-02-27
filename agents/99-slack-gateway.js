@@ -8,6 +8,7 @@ import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { getDebt, getState, setState, getTransactions, getDailySpend, getSpendByCategory, getRecentTransactions } from '../core/db.js';
 import { appendBrain } from '../core/filesystem.js';
 import { AGENTS } from '../core/registry.js';
+import axios from 'axios';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
@@ -246,9 +247,135 @@ const CFOBOT_TOOLS = [
   }
 ];
 
+
+// ── Jarvis HA tools ────────────────────────────────────────────────────────
+const HA_URL = process.env.HOME_ASSISTANT_URL || 'http://192.168.68.68:8123';
+const HA_TOKEN = process.env.HOME_ASSISTANT_TOKEN || '';
+const haHeaders = () => ({ Authorization: `Bearer ${HA_TOKEN}`, 'Content-Type': 'application/json' });
+
+const GW_DEVICE_MAP = {
+  aatif_ac:        { domain: 'switch',  entityId: process.env.HA_AC_ENTITY || 'switch.aatif_ac', name: "Aatif's AC" },
+  aatif_yellow:    { domain: 'light',   entityId: process.env.HA_BEDROOM_LIGHTS || 'light.4_switch_switch_2', name: "Aatif's Yellow Light" },
+  aatif_tubelight: { domain: 'light',   entityId: process.env.HA_DESK_LAMP || 'light.4_switch_switch_4', name: "Aatif's Tubelight" },
+  fan:             { domain: 'fan',     entityId: process.env.HA_FAN || 'fan.fan', name: 'Fan' },
+  aakif_ac:        { domain: 'switch',  entityId: process.env.HA_AAKIF_AC || 'switch.aakif_ac', name: "Aakif's AC" },
+  aakif_tubelight: { domain: 'light',   entityId: 'light.aakif_room_switch_1', name: "Aakif's Tubelight" },
+  aakif_light:     { domain: 'light',   entityId: 'light.aakif_room_switch_3', name: "Aakif's Light" },
+  aakif_yellow:    { domain: 'light',   entityId: 'light.aakif_room_switch_4', name: "Aakif's Yellow Light" },
+  aakif_fan:       { domain: 'fan',     entityId: 'fan.aakif_room_switch_2', name: "Aakif's Fan" },
+  saima_yellow:    { domain: 'light',   entityId: 'light.saima_room_switch_2', name: "Saima's Yellow Light" },
+  saima_balcony:   { domain: 'light',   entityId: 'light.saima_room_switch_3', name: 'Balcony Light' },
+  saima_tubelight: { domain: 'light',   entityId: 'light.saima_room_switch_4', name: "Saima's Tubelight" },
+  saima_fan:       { domain: 'fan',     entityId: 'fan.saima_room_switch_1', name: "Saima's Fan" },
+  light_strip:     { domain: 'light',   entityId: process.env.HA_LIGHT_STRIP || 'light.light_strip', name: 'Light Strip' },
+  humidifier:      { domain: 'switch',  entityId: process.env.HA_HUMIDIFIER || 'switch.humidifier', name: 'Humidifier' },
+  geyser:          { domain: 'switch',  entityId: process.env.HA_GEYSER || 'switch.gyeser_plug', name: 'Geyser' },
+  xbox_light:      { domain: 'switch',  entityId: process.env.HA_XBOX_LIGHT || 'switch.xbox_light', name: 'Xbox Light' },
+};
+
+const GW_SENSOR_MAP = {
+  motion: process.env.HA_MOTION_SENSOR || 'binary_sensor.motion_sensor_motion',
+  door: process.env.HA_DOOR_SENSOR || 'binary_sensor.side_door_door',
+  temperature: process.env.HA_TEMP_SENSOR || 'sensor.temperature_and_humidity_sensor_temperature',
+  humidity: process.env.HA_HUMIDITY_SENSOR || 'sensor.temperature_and_humidity_sensor_humidity',
+};
+
+async function gwControlDevice(deviceKey, action, value) {
+  const d = GW_DEVICE_MAP[deviceKey];
+  if (!d) return `Unknown device: ${deviceKey}. Available: ${Object.keys(GW_DEVICE_MAP).join(', ')}`;
+  let service, payload;
+  if (d.domain === 'switch' || d.domain === 'siren') {
+    service = (action === 'turn_on' || action === 'on') ? 'turn_on' : 'turn_off';
+    payload = { entity_id: d.entityId };
+  } else if (d.domain === 'light') {
+    if (action === 'dim' || action === 'brightness') {
+      service = 'turn_on'; payload = { entity_id: d.entityId, brightness_pct: Number(value) || 50 };
+    } else {
+      service = (action === 'turn_on' || action === 'on') ? 'turn_on' : 'turn_off';
+      payload = { entity_id: d.entityId };
+    }
+  } else if (d.domain === 'fan') {
+    if (action === 'speed') {
+      service = 'set_percentage'; payload = { entity_id: d.entityId, percentage: Number(value) || 50 };
+    } else {
+      service = (action === 'turn_on' || action === 'on') ? 'turn_on' : 'turn_off';
+      payload = { entity_id: d.entityId };
+    }
+  } else { service = action; payload = { entity_id: d.entityId }; }
+  try {
+    await axios.post(`${HA_URL}/api/services/${d.domain}/${service}`, payload, { headers: haHeaders() });
+    return `\u2705 ${d.name}: ${service}${value !== undefined ? ` (${value})` : ''}`;
+  } catch (e) { return `\u274c ${d.name} error: ${e.response?.status || e.message}`; }
+}
+
+const JARVIS_TOOLS = [
+  {
+    name: 'control_device',
+    description: 'Control a smart home device. Actions: turn_on, turn_off, dim (lights), speed (fans). Devices: ' + Object.keys(GW_DEVICE_MAP).join(', '),
+    parameters: { type: 'object', properties: { device: { type: 'string' }, action: { type: 'string' }, value: { type: 'number' } }, required: ['device', 'action'] },
+    execute: async ({ device, action, value }) => await gwControlDevice(device, action, value)
+  },
+  {
+    name: 'read_sensors',
+    description: 'Read all sensor values: motion, door, temperature, humidity.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      const results = [];
+      for (const [name, entityId] of Object.entries(GW_SENSOR_MAP)) {
+        try {
+          const res = await axios.get(`${HA_URL}/api/states/${entityId}`, { headers: haHeaders() });
+          const s = res.data;
+          results.push(`${s.attributes?.friendly_name || name}: ${s.state}${s.attributes?.unit_of_measurement ? ' ' + s.attributes.unit_of_measurement : ''}`);
+        } catch (e) { results.push(`${name}: error`); }
+      }
+      return results.join('\n');
+    }
+  },
+  {
+    name: 'list_devices',
+    description: 'List all smart home devices with their current on/off state.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      const results = [];
+      for (const [key, d] of Object.entries(GW_DEVICE_MAP)) {
+        try {
+          const res = await axios.get(`${HA_URL}/api/states/${d.entityId}`, { headers: haHeaders() });
+          results.push(`${res.data.state === 'on' ? '\ud83d\udfe2' : '\u26ab'} ${d.name} (${key}) — ${res.data.state}`);
+        } catch (e) { results.push(`\u26ab ${d.name} (${key}) — error`); }
+      }
+      return results.join('\n');
+    }
+  },
+  {
+    name: 'sleep_mode',
+    description: 'Activate sleep mode: dim Aatif lights to 10%, turn on AC.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      const results = [];
+      results.push(await gwControlDevice('aatif_yellow', 'dim', 10));
+      results.push(await gwControlDevice('aatif_tubelight', 'turn_off'));
+      results.push(await gwControlDevice('aatif_ac', 'turn_on'));
+      return `\ud83c\udf19 Sleep mode:\n${results.join('\n')}`;
+    }
+  },
+  {
+    name: 'get_weather',
+    description: 'Get current weather forecast.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    execute: async () => {
+      try {
+        const res = await axios.get(`${HA_URL}/api/states/weather.forecast_home`, { headers: haHeaders() });
+        const w = res.data;
+        return `Weather: ${w.state}, ${w.attributes?.temperature}\u00b0C, humidity ${w.attributes?.humidity}%, wind ${w.attributes?.wind_speed} km/h`;
+      } catch (e) { return `Weather error: ${e.message}`; }
+    }
+  }
+];
+
 // Tool map for agents that need tools when created by the gateway
 const AGENT_TOOLS = {
   '01-edmobot': EDMOBOT_TOOLS,
+  '05-jarvis': JARVIS_TOOLS,
   '06-cfobot': CFOBOT_TOOLS
 };
 
