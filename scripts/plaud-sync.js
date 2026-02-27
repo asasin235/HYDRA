@@ -141,7 +141,7 @@ async function transcribeWithWhisperCpp(audioPath) {
 
     try {
         const result = execSync(
-            `"${WHISPER_CPP_PATH}" -m "${WHISPER_MODEL_PATH}" -f "${needsConvert ? wavPath : audioPath}" --no-timestamps -t 4 2>/dev/null`,
+            `"${WHISPER_CPP_PATH}" -m "${WHISPER_MODEL_PATH}" -f "${needsConvert ? wavPath : audioPath}" --no-timestamps -t 4 -l auto 2>/dev/null`,
             { timeout: 300000, maxBuffer: 10 * 1024 * 1024 }
         ).toString().trim();
 
