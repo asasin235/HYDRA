@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { checkBudget, recordUsage, isOpen, isPaused } from './bottleneck.js';
 import { brainPath, appendBrain, writeBrain } from './filesystem.js';
 import { searchScreenContext } from './memory.js';
+import { addLog } from './db.js';
 import { AGENTS } from './registry.js';
 import { createLogger } from './logger.js';
 
@@ -370,6 +371,8 @@ export default class Agent {
         model: this.model
       };
       await appendBrain(this.namespace, filename, entry);
+      // Also write to SQLite daily_logs for structured queries
+      try { addLog(this.name, date, response.slice(0, 500), (usage?.outputTokens || 0)); } catch { }
     } catch (error) {
       this.log.error('log error', { error: error.message });
     }

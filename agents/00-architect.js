@@ -6,6 +6,7 @@ import fs from 'fs-extra';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { getLogs, getDebt, setState } from '../core/db.js';
+import { readBrain } from '../core/filesystem.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { AGENT_NAMES, AGENT_NAMESPACES } from '../core/registry.js';
 import { readRecentContext, readTodayScreenActivity, readTodayAudioTranscripts } from '../core/openclaw-memory.js';
@@ -46,15 +47,21 @@ function today() {
 
 async function gatherTodaySummaries() {
   const date = today();
+  const filename = `daily_log_${date}.json`;
   const sections = [];
   for (const a of AGENTS) {
     try {
-      const rows = getLogs(a, 1) || [];
-      const todays = rows.filter(r => r.date === date);
-      if (todays.length) {
-        const combined = todays.map(r => (r.summary || '')).join('\n');
-        sections.push(`Agent ${a}:\n${combined}`);
-      }
+      const ns = AGENT_NAMESPACES[a];
+      if (!ns) continue;
+      const entries = await readBrain(ns, filename);
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+      const summaries = entries.map(e => {
+        const time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '??:??';
+        const tokens = (e.usage?.inputTokens || 0) + (e.usage?.outputTokens || 0);
+        const resp = (e.response || '').slice(0, 200);
+        return `[${time}] (${tokens} tok) ${resp}`;
+      });
+      sections.push(`**${a}** (${entries.length} runs):\n${summaries.join('\n')}`);
     } catch (e) {
       console.error('[00-architect] gather logs error for', a, e.message);
     }

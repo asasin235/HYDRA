@@ -18,7 +18,7 @@ const MODEL_RATES = {
   'mistralai/mistral-small-3.2-24b-instruct': 0.00000012,  // $0.06/M in, $0.18/M out (avg)
   'deepseek/deepseek-r1': 0.0000016,              // $0.70/M in, $2.50/M out (avg)
   // Legacy aliases (kept for backward compat)
-  'google/gemini-flash-3': 0.0000014,
+  'google/gemini-2.5-flash': 0.0000014,
   'anthropic/claude-sonnet-4': 0.000009,
   'gemini-flash': 0.0000014,
   'claude-sonnet': 0.000009,
