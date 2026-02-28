@@ -239,7 +239,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>HYDRA Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{
@@ -629,10 +629,10 @@ async function loadAll() {
     healthData = results[1];
     logsData = results[2];
     heartbeatData = results[3];
-    renderOverview();
-    renderAgents();
-    renderLogs();
-    renderHealth();
+    try { renderOverview(); } catch(e) { console.error('renderOverview:', e); }
+    try { renderAgents(); } catch(e) { console.error('renderAgents:', e); }
+    try { renderLogs(); } catch(e) { console.error('renderLogs:', e); }
+    try { renderHealth(); } catch(e) { console.error('renderHealth:', e); }
     var ts = new Date().toLocaleTimeString();
     document.getElementById('last-refresh').textContent = ts;
     document.getElementById('last-refresh-a').textContent = ts;
@@ -675,6 +675,7 @@ function renderOverview() {
   else fill.style.background = 'linear-gradient(90deg,#ef4444,#dc2626)';
 
   /* Doughnut chart */
+  if(typeof Chart !== 'undefined') {
   var cLabels = [], cValues = [];
   var palette = ['#4285f4','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#f97316','#14b8a6','#6366f1','#84cc16','#a855f7','#0ea5e9'];
   var sorted = Object.entries(agents).sort(function(a,b){ return b[1].costMonth - a[1].costMonth; });
@@ -728,6 +729,7 @@ function renderOverview() {
       }
     }
   });
+  } /* end Chart guard */
 }
 
 /* ---- Agents table ---- */

@@ -697,7 +697,7 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 - [x] whisper.cpp setup script with Apple Silicon Metal support
 - [x] Context injection into all agents via `Agent.run()` auto-search
 - [x] SMS reader — macOS Messages bank SMS → SQLite transactions (`sms-reader.js`)
-- [x] Token usage dashboard (`scripts/dashboard.js`, port 3080)
+- [x] Token usage dashboard (`scripts/dashboard.js`, port 3080) — redesigned with Gemini AI-inspired visual design, sidebar navigation, Chart.js spending charts, log filtering by agent/model, and dedicated System Health section with watchtower monitoring
 - [x] 08-watchtower agent — PM2 health monitoring, auto-restart, budget alerts
 - [x] 12-careerbot agent — GitHub profile analysis, skill gap scoring
 - [x] Redis event bus (`core/bus.js`) for inter-agent communication
@@ -712,7 +712,7 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 - [ ] Vitest unit tests for all core modules
 - [ ] Real NSE API — Live market data for Wolf
 - [ ] Prompt versioning — automated version tracking in `prompts/versions/`
-- [ ] Dashboard auth improvements
+- [x] Dashboard auth improvements
 - [ ] Agent-to-agent direct communication via bus
 
 ---
@@ -763,7 +763,7 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 - `newrelic.cjs` — New Relic agent config, loaded via `--require newrelic` in PM2
 
 **New Scripts & Pipelines**
-- `scripts/dashboard.js` — Token usage dashboard (Express, port 3080) with per-agent costs, health status, and authentication
+- `scripts/dashboard.js` — HYDRA Dashboard (Express, port 3080) — Gemini AI-inspired glass morphism design with sidebar navigation, Chart.js spending visualizations (doughnut + bar), agent table with health status, filterable/searchable logs, and dedicated System Health section showing watchtower process monitoring, heartbeats, and per-agent memory/CPU/uptime metrics
 - `scripts/sms-reader.js` — macOS Messages `chat.db` → Indian bank SMS parsing → SQLite `transactions` table + `sms_inbox.json` for CFO bot
 - `scripts/ingest-context.js` — Unified watcher for `shared_context/{screen,audio}/` → LanceDB ingestion with embeddings
 - `scripts/screenpipe-sync.js` — Now tracks byte offset per date to avoid double-ingestion into LanceDB
