@@ -73,7 +73,7 @@ const SHARED_CSS = `
   .sidebar-logo{display:flex;align-items:center;gap:12px;text-decoration:none}
   .sidebar-logo .skull{width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#00e5ff,#7c4dff);border-radius:10px;font-size:18px;animation:breathe 4s ease-in-out infinite}
   .sidebar-logo h1{font-size:20px;font-weight:700;background:linear-gradient(135deg,#00e5ff,#7c4dff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:2px}
-  .sidebar-logo .tagline{font-size:10px;color:#556;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
+  .sidebar-logo .tagline{font-size:12px;color:#556;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
   .sidebar-nav{flex:1;overflow-y:auto;padding:12px 0}
   .sidebar-nav::-webkit-scrollbar{width:4px}
   .sidebar-nav::-webkit-scrollbar-thumb{background:rgba(0,229,255,.2);border-radius:4px}
@@ -181,7 +181,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
   .login-brand{text-align:center;margin-bottom:32px}
   .login-brand .icon{width:56px;height:56px;margin:0 auto 16px;border-radius:14px;background:linear-gradient(135deg,#00e5ff,#7c4dff);display:flex;align-items:center;justify-content:center;font-size:28px;animation:breathe 4s ease-in-out infinite}
   .login-brand h1{font-size:24px;font-weight:700;background:linear-gradient(135deg,#00e5ff,#7c4dff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:3px}
-  .login-brand p{font-size:11px;color:#445;letter-spacing:1.5px;text-transform:uppercase;margin-top:6px}
+  .login-brand p{font-size:12px;color:#445;letter-spacing:1.5px;text-transform:uppercase;margin-top:6px}
   .login-field{margin-bottom:16px}
   .login-field label{display:block;font-size:11px;color:#556;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:500}
   .login-field input{width:100%;padding:12px 16px;border:1px solid rgba(0,229,255,.1);border-radius:10px;background:rgba(6,8,16,.8);color:#c8d6e5;font-size:14px;font-family:inherit;transition:all .2s}
@@ -331,7 +331,8 @@ app.get('/api/heartbeats', async (req, res) => {
   }
 });
 
-// Restart agent via PM2
+// Restart agent via PM2 (rate-limited: 1 restart per agent per 10 seconds)
+const restartTimestamps = new Map();
 app.post('/api/restart/:name', async (req, res) => {
   const agentName = req.params.name;
   // Validate the agent name exists in registry or is a known PM2 process
@@ -339,9 +340,16 @@ app.post('/api/restart/:name', async (req, res) => {
   if (!knownNames.includes(agentName)) {
     return res.status(400).json({ error: 'Unknown agent: ' + agentName });
   }
+  // Rate limit: 1 restart per agent per 10 seconds
+  const now = Date.now();
+  const lastRestart = restartTimestamps.get(agentName) || 0;
+  if (now - lastRestart < 10000) {
+    return res.status(429).json({ error: 'Too many restarts. Wait 10 seconds between restart attempts.' });
+  }
+  restartTimestamps.set(agentName, now);
   try {
-    const { execSync } = await import('child_process');
-    execSync(`pm2 restart ${agentName}`, { timeout: 10000 });
+    const { execFileSync } = await import('child_process');
+    execFileSync('pm2', ['restart', agentName], { timeout: 10000 });
     res.json({ success: true, message: `${agentName} restarted successfully` });
   } catch (e) {
     res.status(500).json({ error: 'Restart failed: ' + e.message });
