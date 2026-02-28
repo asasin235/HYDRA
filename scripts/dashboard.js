@@ -99,7 +99,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
 </style>
 </head><body>
 <div class="login-box">
-  <div class="logo">\u{1F409}</div>
+  <div class="logo" aria-label="HYDRA logo">\u{1F409}</div>
   <h1>HYDRA</h1>
   <div class="subtitle">Multi-Agent AI Operating System</div>
   <form method="POST" action="/login">
@@ -239,7 +239,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>HYDRA Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb" crossorigin="anonymous"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{
@@ -276,9 +276,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   }
   .sidebar-nav{flex:1;padding:16px 0;overflow-y:auto}
   .nav-item{
-    display:flex;align-items:center;gap:12px;padding:12px 24px;
+    display:flex;align-items:center;gap:12px;padding:12px 24px;width:100%;
     color:#94a3b8;text-decoration:none;font-size:14px;font-weight:500;
-    cursor:pointer;border-left:3px solid transparent;
+    cursor:pointer;border-left:3px solid transparent;border-right:none;border-top:none;border-bottom:none;
+    background:transparent;text-align:left;
     transition:all 0.2s ease;
   }
   .nav-item:hover{color:#e2e8f0;background:rgba(66,133,244,0.04)}
@@ -316,7 +317,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .refresh-info{font-size:12px;color:#475569}
 
   /* Sections */
-  .section{display:none;animation:fadeIn 0.35s ease-out}
+  .section{display:none;animation:fadeIn 0.35s ease-out;outline:none}
+  .section:focus{outline:none}
   .section.active{display:block}
 
   /* Glass card */
@@ -466,10 +468,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="sidebar-brand">\u{1F409} <span>HYDRA</span></div>
   </div>
   <nav class="sidebar-nav">
-    <div class="nav-item active" data-section="overview"><span class="nav-icon">\u{1F4CA}</span>Overview</div>
-    <div class="nav-item" data-section="agents"><span class="nav-icon">\u{1F916}</span>Agents</div>
-    <div class="nav-item" data-section="logs"><span class="nav-icon">\u{1F4CB}</span>Logs</div>
-    <div class="nav-item" data-section="health"><span class="nav-icon">\u{1F6E1}</span>System Health</div>
+    <button class="nav-item active" data-section="overview" role="tab" aria-selected="true"><span class="nav-icon" aria-hidden="true">\u{1F4CA}</span>Overview</button>
+    <button class="nav-item" data-section="agents" role="tab" aria-selected="false"><span class="nav-icon" aria-hidden="true">\u{1F916}</span>Agents</button>
+    <button class="nav-item" data-section="logs" role="tab" aria-selected="false"><span class="nav-icon" aria-hidden="true">\u{1F4CB}</span>Logs</button>
+    <button class="nav-item" data-section="health" role="tab" aria-selected="false"><span class="nav-icon" aria-hidden="true">\u{1F6E1}</span>System Health</button>
   </nav>
   <div class="sidebar-footer">
     <a href="/logout" class="logout-link">\u{1F6AA} Sign Out</a>
@@ -477,13 +479,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </aside>
 
 <!-- Toggle -->
-<button class="toggle-btn" id="toggle-btn">\u{2630}</button>
+<button class="toggle-btn" id="toggle-btn" aria-label="Toggle sidebar navigation" aria-expanded="true">\u{2630}</button>
 
 <!-- Main -->
 <div class="main-content" id="main-content">
 
   <!-- ===== OVERVIEW ===== -->
-  <div class="section active" id="section-overview">
+  <div class="section active" id="section-overview" tabindex="-1">
     <div class="page-header">
       <div class="page-title">\u{1F4CA} Overview</div>
       <div class="refresh-info">Auto-refresh 60s \u00B7 <span id="last-refresh">-</span></div>
@@ -517,7 +519,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </div>
 
   <!-- ===== AGENTS ===== -->
-  <div class="section" id="section-agents">
+  <div class="section" id="section-agents" tabindex="-1">
     <div class="page-header">
       <div class="page-title">\u{1F916} Agents</div>
       <div class="refresh-info">Auto-refresh 60s \u00B7 <span id="last-refresh-a">-</span></div>
@@ -541,7 +543,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </div>
 
   <!-- ===== LOGS ===== -->
-  <div class="section" id="section-logs">
+  <div class="section" id="section-logs" tabindex="-1">
     <div class="page-header">
       <div class="page-title">\u{1F4CB} Agent Logs</div>
       <div class="refresh-info">Latest 50 entries</div>
@@ -554,7 +556,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </div>
 
   <!-- ===== SYSTEM HEALTH ===== -->
-  <div class="section" id="section-health">
+  <div class="section" id="section-health" tabindex="-1">
     <div class="page-header">
       <div class="page-title">\u{1F6E1} System Health</div>
       <div class="refresh-info">Auto-refresh 60s \u00B7 <span id="last-refresh-h">-</span></div>
@@ -594,10 +596,13 @@ var spendingChart = null, dailyChart = null;
   items.forEach(function(el) {
     el.addEventListener('click', function() {
       var target = this.getAttribute('data-section');
-      items.forEach(function(n) { n.classList.remove('active'); });
+      items.forEach(function(n) { n.classList.remove('active'); n.setAttribute('aria-selected','false'); });
       secs.forEach(function(s) { s.classList.remove('active'); });
       this.classList.add('active');
-      document.getElementById('section-' + target).classList.add('active');
+      this.setAttribute('aria-selected','true');
+      var sec = document.getElementById('section-' + target);
+      sec.classList.add('active');
+      sec.focus();
     });
   });
   var sb = document.getElementById('sidebar');
@@ -607,6 +612,7 @@ var spendingChart = null, dailyChart = null;
     sb.classList.toggle('collapsed');
     mc.classList.toggle('expanded');
     tb.classList.toggle('shifted');
+    tb.setAttribute('aria-expanded', !sb.classList.contains('collapsed'));
   });
 })();
 
