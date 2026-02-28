@@ -89,6 +89,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
   CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category);
   CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
+
+  CREATE TABLE IF NOT EXISTS conversation_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_conv_history_agent ON conversation_history(agent, created_at);
 `);
 
 // Initialize debt_tracker row if not exists
@@ -142,6 +152,12 @@ const getLogsStmt = db.prepare(`
   SELECT * FROM daily_logs 
   WHERE agent = ? AND date >= date('now', '-' || ? || ' days')
   ORDER BY date DESC
+`);
+
+const getRecentLogsStmt = db.prepare(`
+  SELECT agent, date, summary, tokens_used, created_at FROM daily_logs
+  ORDER BY created_at DESC
+  LIMIT ?
 `);
 
 // Prepared statements for paper_trades
@@ -201,6 +217,26 @@ const getSyncStateStmt = db.prepare(`
 const setSyncStateStmt = db.prepare(`
   INSERT OR REPLACE INTO sync_state (key, value, updated_at)
   VALUES (?, ?, datetime('now'))
+`);
+
+// Prepared statements for conversation_history
+const addConvMsgStmt = db.prepare(`
+  INSERT INTO conversation_history (agent, role, content, created_at)
+  VALUES (?, ?, ?, datetime('now'))
+`);
+
+const getRecentConvStmt = db.prepare(`
+  SELECT role, content FROM conversation_history
+  WHERE agent = ?
+  ORDER BY created_at DESC
+  LIMIT ?
+`);
+
+const pruneConvStmt = db.prepare(`
+  DELETE FROM conversation_history
+  WHERE agent = ? AND id NOT IN (
+    SELECT id FROM conversation_history WHERE agent = ? ORDER BY created_at DESC LIMIT ?
+  )
 `);
 
 /**
@@ -293,6 +329,15 @@ export function addLog(agent, date, summary, tokensUsed = 0) {
  */
 export function getLogs(agent, days = 7) {
   return getLogsStmt.all(agent, days);
+}
+
+/**
+ * Get recent logs across all agents
+ * @param {number} limit - Max log entries to return
+ * @returns {Array} Log entries sorted by most recent
+ */
+export function getRecentLogs(limit = 50) {
+  return getRecentLogsStmt.all(limit);
 }
 
 /**
@@ -415,6 +460,35 @@ export function getLastSyncTimestamp(key) {
  */
 export function setLastSyncTimestamp(key, value) {
   setSyncStateStmt.run(key, value);
+}
+
+/**
+ * Add a conversation message for an agent
+ * @param {string} agent - Agent name
+ * @param {string} role - 'user' or 'assistant'
+ * @param {string} content - Message content
+ */
+export function addConversationMessage(agent, role, content) {
+  addConvMsgStmt.run(agent, role, content.slice(0, 4000));
+}
+
+/**
+ * Get recent conversation messages for an agent (oldest-first)
+ * @param {string} agent - Agent name
+ * @param {number} limit - Max messages to return
+ * @returns {Array<{role: string, content: string}>}
+ */
+export function getRecentConversation(agent, limit = 10) {
+  return getRecentConvStmt.all(agent, limit).reverse();
+}
+
+/**
+ * Prune old conversation messages, keeping the most recent N
+ * @param {string} agent - Agent name
+ * @param {number} keepLast - Number of messages to keep
+ */
+export function pruneConversation(agent, keepLast = 20) {
+  pruneConvStmt.run(agent, agent, keepLast);
 }
 
 /**

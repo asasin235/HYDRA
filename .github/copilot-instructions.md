@@ -131,8 +131,9 @@ node agents/08-watchtower.js --sweep-now  # Manual health sweep
 
 ## Model Preferences
 
-When choosing models for new agents in `core/registry.js`:
+Use the right model for the right job — both for HYDRA agents and for your own AI-assisted development:
 
+**For HYDRA agent config** (in `core/registry.js`):
 - **Planning / orchestration / complex reasoning** → `anthropic/claude-opus-4.6` (Tier 1 only, high cost)
 - **Coding / tool-heavy work** → `anthropic/claude-sonnet-4.6` with extended thinking (used by edmobot, mercenary)
 - **High-context summarization** → `google/gemini-2.5-pro` (200K context, used by cfobot, wolf)
@@ -140,22 +141,30 @@ When choosing models for new agents in `core/registry.js`:
 - **Bulk/optional agents** → `mistralai/mistral-small-3.2-24b-instruct` (cheapest, 24K context, used by brandbot, sahibabot, biobot, auditor)
 - **Haiku for speed** → `anthropic/claude-haiku-4.5` (mid-cost, 150K context, used by socialbot)
 
+**For AI-assisted development on this codebase**:
+- **Planning, architecture, complex reasoning** → Claude Opus 4.6 — use for designing new agents, refactoring core modules, multi-file changes that need holistic understanding
+- **Coding, implementation, debugging** → Claude Sonnet 4.6 with extended thinking — use for writing agent tools, fixing bugs, implementing features, code reviews
+
 Cost rates are defined in `core/bottleneck.js` `MODEL_RATES`. Update there when adding new models.
 
 ## Development Workflow
 
-1. **Always test end-to-end before committing** — run the specific agent or script to verify behaviour:
+1. **Always test end-to-end before finishing** — never commit untested code. Run the specific agent or script to verify behaviour:
    ```sh
    node agents/XX-name.js                  # Run agent directly (Ctrl+C to stop)
    node scripts/some-script.js --test      # Many scripts support --test flag
    node scripts/sms-reader.js --once       # One-shot mode for scripts
    pm2 restart XX-name && pm2 logs XX-name # Test within PM2
    ```
-2. **Commit messages** — use descriptive messages that cover all changes:
+2. **Commit messages must detail everything** — every commit should have a descriptive message covering all changes made. Use a summary line + bullet list for multi-part changes:
    ```
    feat(XX-name): add tool for <thing>, update prompt, wire cron schedule
-   fix(core/bottleneck): correct tier 3 threshold from 60% to 65%
-   chore(scripts): add new-pipeline.js for <purpose>
+
+   - Add <tool_name> tool with <params> to agents/XX-name.js
+   - Update prompts/XX-name.txt with new capability instructions
+   - Wire 9AM cron schedule for daily brief
+   - Add env vars to core/validate-env.js and sample.env
    ```
    Format: `type(scope): description`. Types: `feat`, `fix`, `chore`, `refactor`, `docs`.
 3. **Lint before pushing**: `npm run lint` (ESLint configured for ESM)
+4. **Push after every commit** — keep remote in sync. Always `git push origin main` after committing.

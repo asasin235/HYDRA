@@ -211,4 +211,95 @@ export async function searchCode(repo, query, account) {
   }));
 }
 
+// ── Profile Analysis ──────────────────────────────────────────────────────────
+
+/**
+ * Get a GitHub user's profile.
+ * @param {string} username - GitHub username
+ * @param {string} [account='personal'] - 'personal' or 'work'
+ * @returns {Promise<object>} User profile data
+ */
+export async function getUserProfile(username, account = 'personal') {
+  try {
+    const data = await ghFetch(`/users/${encodeURIComponent(username)}`, {}, account);
+    return {
+      login: data.login,
+      name: data.name,
+      bio: data.bio,
+      public_repos: data.public_repos,
+      followers: data.followers,
+      following: data.following,
+      created_at: data.created_at,
+      html_url: data.html_url
+    };
+  } catch (err) {
+    console.error(`[github] Failed to fetch profile for ${username}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * List a user's public repos with language breakdown, sorted by stars.
+ * @param {string} username - GitHub username
+ * @param {number} [limit=30] - Max repos to return
+ * @param {string} [account='personal'] - 'personal' or 'work'
+ * @returns {Promise<Array>} Repos sorted by stars
+ */
+export async function getUserRepos(username, limit = 30, account = 'personal') {
+  try {
+    const data = await ghFetch(
+      `/users/${encodeURIComponent(username)}/repos?sort=stars&per_page=${limit}&type=owner`,
+      {},
+      account
+    );
+    return (Array.isArray(data) ? data : []).map(r => ({
+      name: r.name,
+      description: r.description,
+      language: r.language,
+      stargazers_count: r.stargazers_count,
+      forks_count: r.forks_count,
+      updated_at: r.updated_at,
+      html_url: r.html_url,
+      topics: r.topics || []
+    }));
+  } catch (err) {
+    console.error(`[github] Failed to fetch repos for ${username}:`, err.message);
+    return [];
+  }
+}
+
+/**
+ * Get a user's recent contribution activity, summarised by event type.
+ * @param {string} username - GitHub username
+ * @param {string} [account='personal'] - 'personal' or 'work'
+ * @returns {Promise<object>} { totalEvents, eventBreakdown, recentRepos }
+ */
+export async function getContributionStats(username, account = 'personal') {
+  try {
+    const events = await ghFetch(
+      `/users/${encodeURIComponent(username)}/events?per_page=50`,
+      {},
+      account
+    );
+    const list = Array.isArray(events) ? events : [];
+
+    const eventBreakdown = {};
+    const repoSet = new Set();
+
+    for (const evt of list) {
+      eventBreakdown[evt.type] = (eventBreakdown[evt.type] || 0) + 1;
+      if (evt.repo?.name) repoSet.add(evt.repo.name);
+    }
+
+    return {
+      totalEvents: list.length,
+      eventBreakdown,
+      recentRepos: [...repoSet]
+    };
+  } catch (err) {
+    console.error(`[github] Failed to fetch contribution stats for ${username}:`, err.message);
+    return { totalEvents: 0, eventBreakdown: {}, recentRepos: [] };
+  }
+}
+
 export { isGitHubConfigured, GITHUB_USERNAME, GITHUB_WORK_USERNAME, ACCOUNTS };

@@ -15,7 +15,8 @@ dotenv.config({ path: path.join(ROOT_DIR, ".env") });
 
 // Import HYDRA core modules
 import { db, addTrade, getTrades, getDebt } from "../core/db.js";
-import { searchContext, writeContext } from "../core/openclaw-memory.js";
+import { writeContext } from "../core/openclaw-memory.js";
+import { searchAllContext } from "../core/memory.js";
 import { getMonthlySpend, isOpen, isPaused } from "../core/bottleneck.js";
 import { ACTIVE_AGENT_NAMES } from "../core/registry.js";
 import { getMessages } from "../core/hermes-bridge.js";
@@ -247,7 +248,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     else if (name === "hydra_search_brain") {
       const { query, limit = 5 } = args;
-      const results = await searchContext(query, limit);
+      const results = await searchAllContext(query, { limit });
       return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
 

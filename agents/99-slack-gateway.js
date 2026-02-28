@@ -99,7 +99,8 @@ import {
   transitionTicket, addJiraComment
 } from '../core/jira.js';
 import {
-  isGitHubConfigured, getFileContent, searchCode, listFiles
+  isGitHubConfigured, getFileContent, searchCode, listFiles,
+  getUserProfile, getUserRepos, getContributionStats
 } from '../core/github.js';
 
 const EDMOBOT_TOOLS = [
@@ -393,11 +394,65 @@ const JARVIS_TOOLS = [
   }
 ];
 
+// CareerBot tools — GitHub analysis and skill gap scoring
+const GW_GITHUB_USERNAME = process.env.GITHUB_USERNAME || '';
+
+const CAREERBOT_TOOLS = [
+  {
+    name: 'analyze_github_profile',
+    description: 'Analyze a GitHub user profile: repos, languages, contribution patterns, stars, and activity trends.',
+    parameters: { type: 'object', properties: { username: { type: 'string', description: 'GitHub username (defaults to GITHUB_USERNAME env)' } }, required: [] },
+    execute: async ({ username }) => {
+      const user = username || GW_GITHUB_USERNAME;
+      if (!user) return 'No GitHub username configured. Set GITHUB_USERNAME in .env.';
+      try {
+        const [profile, repos, activity] = await Promise.all([
+          getUserProfile(user), getUserRepos(user, 50), getContributionStats(user)
+        ]);
+        if (!profile) return `Could not fetch GitHub profile for ${user}.`;
+        const langCount = {};
+        for (const repo of repos) { if (repo.language) langCount[repo.language] = (langCount[repo.language] || 0) + 1; }
+        const topLangs = Object.entries(langCount).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([l, c]) => `${l}: ${c} repos`);
+        const topRepos = repos.sort((a, b) => (b.stargazers_count || 0) - (a.stargazers_count || 0)).slice(0, 5)
+          .map(r => `⭐${r.stargazers_count} ${r.name} (${r.language || 'N/A'}) — ${(r.description || '').slice(0, 80)}`);
+        return [
+          `## GitHub Profile: ${profile.login}`, `Name: ${profile.name || 'N/A'} | Repos: ${profile.public_repos} | Followers: ${profile.followers}`,
+          `Bio: ${profile.bio || 'N/A'}`, '', '### Top Languages', topLangs.join('\n') || 'No data', '', '### Top Repositories',
+          topRepos.join('\n') || 'No repos', '', '### Recent Activity',
+          `Events: ${activity.totalEvents}`, Object.entries(activity.eventBreakdown || {}).map(([t, c]) => `  ${t}: ${c}`).join('\n'),
+          `Active repos: ${(activity.recentRepos || []).slice(0, 5).join(', ') || 'none'}`
+        ].join('\n');
+      } catch (e) { return `GitHub analysis failed: ${e.message}`; }
+    }
+  },
+  {
+    name: 'score_skill_gaps',
+    description: 'Compare current skills against a target job description. Returns structured data for gap analysis.',
+    parameters: { type: 'object', properties: { job_description: { type: 'string', description: 'Target JD or role requirements' }, current_skills: { type: 'string', description: 'Comma-separated skills (optional, inferred from GitHub if omitted)' } }, required: ['job_description'] },
+    execute: async ({ job_description, current_skills }) => {
+      let skills = current_skills;
+      if (!skills && GW_GITHUB_USERNAME) {
+        try {
+          const repos = await getUserRepos(GW_GITHUB_USERNAME, 50);
+          const langs = [...new Set(repos.map(r => r.language).filter(Boolean))];
+          const topics = [...new Set(repos.flatMap(r => r.topics || []))];
+          skills = [...langs, ...topics].join(', ');
+        } catch { skills = ''; }
+      }
+      return JSON.stringify({ instruction: 'Analyze skill gaps. Rate each required skill 1-10. Provide overall readiness score and top 3 learning priorities.', current_skills: skills || 'No data — ask user for skills', target_job_description: job_description.slice(0, 3000) }, null, 2);
+    }
+  },
+  { name: 'analyze_resume', description: '(Coming soon) Analyze and diff resume versions.', parameters: { type: 'object', properties: {}, required: [] }, execute: async () => 'Not yet implemented.' },
+  { name: 'search_salary_data', description: '(Coming soon) Search salary benchmarks.', parameters: { type: 'object', properties: { role: { type: 'string' }, location: { type: 'string' } }, required: ['role'] }, execute: async () => 'Not yet implemented.' },
+  { name: 'analyze_linkedin', description: '(Coming soon) Analyze LinkedIn profile.', parameters: { type: 'object', properties: {}, required: [] }, execute: async () => 'Not yet implemented.' }
+];
+
 // Tool map for agents that need tools when created by the gateway
 const AGENT_TOOLS = {
   '01-edmobot': EDMOBOT_TOOLS,
   '05-jarvis': JARVIS_TOOLS,
-  '06-cfobot': CFOBOT_TOOLS
+  '06-cfobot': CFOBOT_TOOLS,
+  '12-careerbot': CAREERBOT_TOOLS
 };
 
 async function getOrCreateAgent(name) {
@@ -578,6 +633,8 @@ async function applyReflectionChanges(agentName, weekNum) {
   const changes = reflection.prompt_changes || [];
 
   let promptText = (await fs.pathExists(promptFile)) ? await fs.readFile(promptFile, 'utf-8') : '';
+  const originalPromptText = promptText;
+
   let applied = 0;
   for (const change of changes) {
     if (!change.current_text || !change.proposed_text) continue;
@@ -589,6 +646,20 @@ async function applyReflectionChanges(agentName, weekNum) {
       promptText += `\n\n## Reflection Update W${weekNum}\n${change.proposed_text}`;
       applied++;
     }
+  }
+
+  // Save a dated snapshot of the original prompt before overwriting
+  if (originalPromptText) {
+    const versionsDir = path.join(process.cwd(), 'prompts', 'versions');
+    await fs.ensureDir(versionsDir);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    let versionFile = path.join(versionsDir, `${agentName}.${dateStr}.txt`);
+    if (await fs.pathExists(versionFile)) {
+      let seq = 2;
+      while (await fs.pathExists(path.join(versionsDir, `${agentName}.${dateStr}.${seq}.txt`))) seq++;
+      versionFile = path.join(versionsDir, `${agentName}.${dateStr}.${seq}.txt`);
+    }
+    await fs.writeFile(versionFile, originalPromptText, 'utf-8');
   }
 
   await fs.writeFile(promptFile, promptText, 'utf-8');

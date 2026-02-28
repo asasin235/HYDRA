@@ -140,12 +140,13 @@ export async function writeContext(source, type, content) {
 
 /**
  * Search OpenClaw's memory using the CLI.
- *
+ * @deprecated Use searchAllContext() from core/memory.js instead. LanceDB is the canonical search source.
  * @param {string} query - Natural language search query
  * @param {number} [limit=5] - Max results
  * @returns {Promise<Array<{path: string, snippet: string, score?: number}>>}
  */
 export async function searchContext(query, limit = 5) {
+    console.warn('[openclaw-memory] DEPRECATED: searchContext() called. Use core/memory.js searchAllContext() instead.');
     try {
         const { stdout } = await execFileAsync(OPENCLAW_BIN, [
             'memory', 'search', '--query', query, '--limit', String(limit), '--json'

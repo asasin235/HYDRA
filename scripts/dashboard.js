@@ -12,6 +12,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
 import { AGENTS } from '../core/registry.js';
+import { getRecentLogs } from '../core/db.js';
 
 const app = express();
 const PORT = process.env.DASHBOARD_PORT || 3080;
@@ -152,6 +153,41 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+app.get('/api/logs', (req, res) => {
+  try {
+    const logs = getRecentLogs(50);
+    res.json(logs);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/heartbeats', async (req, res) => {
+  try {
+    const heartbeats = {};
+    for (const [name, cfg] of Object.entries(AGENTS)) {
+      if (!cfg.namespace || name === '99-slack-gateway') continue;
+      const hbFile = path.join(BRAIN_PATH, 'brain', cfg.namespace, 'heartbeat.json');
+      try {
+        if (await fs.pathExists(hbFile)) {
+          const hb = await fs.readJson(hbFile);
+          const ageMs = Date.now() - (hb.ts || 0);
+          heartbeats[name] = {
+            lastBeat: hb.ts ? new Date(hb.ts).toISOString() : null,
+            ageSeconds: Math.floor(ageMs / 1000),
+            status: ageMs < 10 * 60 * 1000 ? 'fresh' : ageMs < 30 * 60 * 1000 ? 'stale' : 'dead'
+          };
+        } else {
+          heartbeats[name] = { lastBeat: null, ageSeconds: null, status: 'no-data' };
+        }
+      } catch { heartbeats[name] = { lastBeat: null, ageSeconds: null, status: 'error' }; }
+    }
+    res.json(heartbeats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Main dashboard
 app.get('/', (req, res) => {
   res.send(DASHBOARD_HTML);
@@ -194,6 +230,19 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .tier-1{color:#00d4ff}.tier-2{color:#ffbb00}.tier-3{color:#888}
   .refresh{font-size:11px;color:#555;text-align:right;margin-top:12px}
   .money{font-family:'SF Mono',Monaco,Consolas,monospace}
+  .log-entry{padding:8px 12px;border-bottom:1px solid #222;font-size:13px}
+  .log-entry:last-child{border-bottom:none}
+  .log-agent{color:#00d4ff;font-weight:600;margin-right:8px}
+  .log-date{color:#666;font-size:11px;margin-right:8px}
+  .log-tokens{color:#888;font-size:11px;float:right}
+  .hb-card{background:#1a1a2e;padding:14px;border-radius:8px;text-align:center;min-width:120px}
+  .hb-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+  .hb-dot.fresh{background:#00ff88}
+  .hb-dot.stale{background:#ffbb00}
+  .hb-dot.dead{background:#ff4444}
+  .hb-dot.no-data{background:#444}
+  .hb-dot.error{background:#444}
+  .hb-age{font-size:11px;color:#888;margin-top:4px}
   @media(max-width:600px){.cards{grid-template-columns:1fr 1fr}td,th{padding:8px;font-size:12px}}
 </style>
 </head><body>
@@ -229,6 +278,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <td id="t-tokens-month">-</td><td id="t-cost-month" class="money">-</td><td></td>
   </tr></tfoot>
 </table>
+
+<h2 style="margin-top:32px;margin-bottom:12px;color:#00d4ff">💓 Heartbeat Timeline</h2>
+<div class="cards" id="heartbeat-grid"></div>
+
+<h2 style="margin-top:32px;margin-bottom:12px;color:#00d4ff">📋 Recent Agent Logs</h2>
+<div id="log-feed" style="background:#1a1a2e;border-radius:10px;padding:16px;max-height:400px;overflow-y:auto"></div>
 
 <div class="refresh">Auto-refreshes every 60s · <span id="last-refresh">-</span></div>
 
@@ -313,8 +368,33 @@ async function load() {
   document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
 }
 
+async function loadHeartbeats() {
+  try {
+    const hb = await fetch('/api/heartbeats').then(r=>r.json());
+    const grid = document.getElementById('heartbeat-grid');
+    grid.innerHTML = '';
+    for (const [name, data] of Object.entries(hb)) {
+      const age = data.ageSeconds != null ? (data.ageSeconds < 60 ? data.ageSeconds + 's ago' : Math.floor(data.ageSeconds/60) + 'm ago') : 'N/A';
+      grid.innerHTML += '<div class="hb-card"><div><span class="hb-dot ' + data.status + '"></span><strong>' + name + '</strong></div><div class="hb-age">' + age + '</div></div>';
+    }
+  } catch {}
+}
+
+async function loadLogs() {
+  try {
+    const logs = await fetch('/api/logs').then(r=>r.json());
+    const feed = document.getElementById('log-feed');
+    if (!logs.length) { feed.innerHTML = '<div style="color:#666;padding:12px">No logs yet</div>'; return; }
+    feed.innerHTML = logs.map(l =>
+      '<div class="log-entry"><span class="log-date">' + (l.created_at || l.date) + '</span><span class="log-agent">' + l.agent + '</span>' + (l.summary || '').slice(0, 200) + '<span class="log-tokens">' + (l.tokens_used || 0) + ' tok</span></div>'
+    ).join('');
+  } catch {}
+}
+
 load();
-setInterval(load, 60000);
+loadHeartbeats();
+loadLogs();
+setInterval(() => { load(); loadHeartbeats(); loadLogs(); }, 60000);
 </script>
 </body></html>`;
 

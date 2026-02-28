@@ -1,3 +1,7 @@
+// Pre-load .env so NEW_RELIC_LICENSE_KEY is available in process.env
+// when PM2 evaluates the env blocks below (before --require hooks run)
+require('dotenv').config({ path: './.env' });
+
 module.exports = {
   apps: [
     // Core agents
@@ -12,6 +16,7 @@ module.exports = {
     app('09-wolf'),
     app('10-mercenary'),
     app('11-auditor'),
+    app('12-careerbot'),
     // Gateway
     app('99-slack-gateway'),
     // Scripts (data pipelines)
@@ -31,6 +36,7 @@ module.exports = {
       time: true
     },
     // ── Observability ───────────────────────────────────────────────────────
+    script('health-server', './core/health-server.js'),
     app('08-watchtower'),
     {
       name: 'pm2-exporter',
@@ -70,11 +76,14 @@ function app(name) {
     exec_mode: 'fork',
     autorestart: true,
     max_memory_restart: '512M',
-    node_args: '--require dotenv/config',
+    node_args: '--require newrelic --require dotenv/config',
     env: {
       NODE_ENV: 'production',
       DOTENV_CONFIG_PATH: './.env',
-      PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
+      PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+      NEW_RELIC_APP_NAME: `HYDRA/${name}`,
+      NEW_RELIC_LICENSE_KEY: process.env.NEW_RELIC_LICENSE_KEY || '',
+      LANCEDB_LOG: process.env.LANCEDB_LOG || 'debug',
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,
@@ -90,11 +99,14 @@ function script(name, scriptPath) {
     exec_mode: 'fork',
     autorestart: true,
     max_memory_restart: '256M',
-    node_args: '--require dotenv/config',
+    node_args: '--require newrelic --require dotenv/config',
     env: {
       NODE_ENV: 'production',
       DOTENV_CONFIG_PATH: './.env',
-      PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
+      PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+      NEW_RELIC_APP_NAME: `HYDRA/${name}`,
+      NEW_RELIC_LICENSE_KEY: process.env.NEW_RELIC_LICENSE_KEY || '',
+      LANCEDB_LOG: process.env.LANCEDB_LOG || 'debug',
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,

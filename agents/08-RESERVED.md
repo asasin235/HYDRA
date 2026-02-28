@@ -1,12 +1,5 @@
-# Agent #08 — CareerBot (Planned)
+# Agent #08 — Watchtower (Active)
 
-Purpose: Long-term career strategy, resume tracking, salary benchmarking, skill gap analysis.
+This slot was originally reserved for CareerBot, but is now used by **08-watchtower** (health monitor).
 
-Tools:
-- LinkedIn scraper
-- Naukri/LinkedIn job alerts
-- GitHub portfolio analyzer
-
-Preferred Model: DeepSeek R1
-
-Status: Reserved for Phase 2.
+CareerBot has been implemented as **12-careerbot**. See `agents/12-careerbot.js`.

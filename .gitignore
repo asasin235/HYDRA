@@ -13,6 +13,17 @@ npm-debug.log*
 # Brain data (synced via SMB, not git)
 brain/
 
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
+# Backup files
+*.bak
+
+# Claude Code config
+.claude/
+
 # PM2
 .pm2/
 
