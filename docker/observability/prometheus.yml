@@ -1,0 +1,25 @@
+# HYDRA Prometheus scrape configuration
+# Targets: pm2-prometheus-exporter running on the Mac Mini host
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    host: mac-mini
+    environment: production
+
+scrape_configs:
+  # PM2 process metrics (CPU, memory, restarts, status)
+  # Requires pm2-prometheus-exporter running on host port 9209
+  - job_name: pm2
+    static_configs:
+      - targets:
+          - host.docker.internal:9209
+        labels:
+          instance: mac-mini
+
+  # Prometheus self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

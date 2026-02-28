@@ -30,6 +30,23 @@ module.exports = {
       out_file: './logs/backup.log',
       time: true
     },
+    // ── Observability ───────────────────────────────────────────────────────
+    app('08-watchtower'),
+    {
+      name: 'pm2-exporter',
+      script: './node_modules/pm2-prometheus-exporter/exporter.js',
+      interpreter: '/opt/homebrew/bin/node',
+      exec_mode: 'fork',
+      autorestart: true,
+      max_memory_restart: '128M',
+      env: {
+        NODE_ENV: 'production',
+        PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
+      },
+      error_file: './logs/pm2-exporter.log',
+      out_file: './logs/pm2-exporter.log',
+      time: true
+    },
     // NOTE: hydra-mcp is NOT managed by PM2. It uses stdio transport and is
     // spawned on-demand by OpenClaw via: openclaw mcp add --name hydra --command "node mcp/hydra-mcp-server.js"
     //

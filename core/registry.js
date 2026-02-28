@@ -28,6 +28,7 @@ export const AGENTS = {
   '05-jarvis': { namespace: '05_JARVIS', model: 'google/gemini-2.5-flash', promptFile: '05-jarvis.txt', tier: 2, contextQuery: 'home automation lights temperature air quality smart home IoT', slackChannel: '#05-jarvis' },
   '06-cfobot': { namespace: '06_CFO', model: 'google/gemini-2.5-pro', promptFile: '06-cfobot.txt', tier: 1, contextQuery: 'finances budget expenses debt payments bank salary invoices transactions money', slackChannel: '#06-cfobot' },
   '07-biobot': { namespace: '07_BIO', model: 'mistralai/mistral-small-3.2-24b-instruct', promptFile: '07-biobot.txt', tier: 2, contextQuery: 'health fitness exercise sleep diet smoking steps heart rate wellness', slackChannel: '#07-biobot' },
+  '08-watchtower': { namespace: '08_WATCHTOWER', model: null, promptFile: null, tier: 1, contextQuery: null, slackChannel: '#hydra-status' },
   '09-wolf': { namespace: '09_WOLF', model: 'google/gemini-2.5-pro', promptFile: '09-wolf.txt', tier: 3, contextQuery: 'trading stocks options F&O market portfolio investments Nifty risk', slackChannel: '#09-wolf' },
   '10-mercenary': { namespace: '10_MERCENARY', model: 'anthropic/claude-sonnet-4.6', promptFile: '10-mercenary.txt', tier: 3, contextQuery: 'freelance clients projects code deployment contracts deadlines', slackChannel: '#10-mercenary' },
   '11-auditor': { namespace: '11_AUDITOR', model: 'mistralai/mistral-small-3.2-24b-instruct', promptFile: '11-auditor.txt', tier: 3, contextQuery: 'agent performance metrics errors logs uptime budget utilisation', slackChannel: '#11-auditor' },

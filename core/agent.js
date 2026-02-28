@@ -10,6 +10,18 @@ import { addLog } from './db.js';
 import { AGENTS } from './registry.js';
 import { createLogger } from './logger.js';
 
+// ── Optional GlitchTip / Sentry error tracking ────────────────────────────────
+// Activated by setting GLITCHTIP_DSN in .env. No-op if unset.
+let Sentry = null;
+if (process.env.GLITCHTIP_DSN) {
+  try {
+    Sentry = await import('@sentry/node');
+    Sentry.init({ dsn: process.env.GLITCHTIP_DSN, tracesSampleRate: 0 });
+  } catch (e) {
+    console.warn('[agent] GlitchTip/Sentry init failed (agents run normally):', e.message);
+  }
+}
+
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const HEALTH_PORT = Number(process.env.HEALTH_PORT || 3002);
 
@@ -344,6 +356,7 @@ export default class Agent {
       return finalText;
     } catch (error) {
       this.log.error('run error', { error: error.message });
+      if (Sentry) Sentry.captureException(error, { tags: { agent: this.name, model: this.model } });
       try {
         await this.#logInteraction(userMessage, `ERROR: ${error.message}`, { inputTokens: 0, outputTokens: 0 });
       } catch { }

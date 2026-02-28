@@ -27,6 +27,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@lancedb/lancedb": "^0.15.0",
+    "@sentry/node": "^10.40.0",
     "@slack/bolt": "^4.1.0",
     "axios": "^1.7.0",
     "better-sqlite3": "^11.7.0",
@@ -38,6 +39,7 @@
     "node-cron": "^3.0.3",
     "openai": "^4.77.0",
     "pm2": "^5.4.0",
+    "pm2-prometheus-exporter": "^0.1.1",
     "uuid": "^11.0.0",
     "winston": "^3.19.0"
   },
