@@ -729,7 +729,11 @@ function renderOverview() {
       }
     }
   });
-  } /* end Chart guard */
+  } else { /* Chart.js not available — show fallback */
+    var fb = '<div style="color:#475569;text-align:center;padding:40px 0">Charts require Chart.js CDN</div>';
+    document.getElementById('spending-chart').parentElement.innerHTML = fb;
+    document.getElementById('daily-chart').parentElement.innerHTML = fb;
+  }
 }
 
 /* ---- Agents table ---- */
