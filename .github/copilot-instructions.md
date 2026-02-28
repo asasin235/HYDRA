@@ -168,3 +168,4 @@ Cost rates are defined in `core/bottleneck.js` `MODEL_RATES`. Update there when 
    Format: `type(scope): description`. Types: `feat`, `fix`, `chore`, `refactor`, `docs`.
 3. **Lint before pushing**: `npm run lint` (ESLint configured for ESM)
 4. **Push after every commit** — keep remote in sync. Always `git push origin main` after committing.
+5. **Update README.md with every commit** — the Changelog section at the bottom of `README.md` must reflect all significant changes. Also update relevant sections (agent registry table, core modules, project structure, tech stack, roadmap) when adding new agents, modules, or scripts.

@@ -70,13 +70,14 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 | **02** | `brandbot`      | Mistral Small 3.2 | Personal brand: GitHub activity → LinkedIn drafts, lead qualification            | Monday 10AM                                  |
 | **03** | `sahibabot`     | Mistral Small 3.2 | Relationship health: nudges, promise tracking, date suggestions, WhatsApp drafts | 4PM daily nudge, Monday events, 8PM promises |
 | **04** | `socialbot`     | Claude Haiku 4.5 | Social proxy: drafts WhatsApp/iMessage/Discord replies via OpenClaw + Screenpipe | Every 2min scan, 9PM daily summary           |
-| **05** | `jarvis`        | Claude Haiku 4.5 | Home automation via Home Assistant: AC, lights, geyser, sleep mode, sensors      | Every 30m automation check                   |
+| **05** | `jarvis`        | Gemini 2.5 Flash  | Home automation via Home Assistant: AC, lights, geyser, sleep mode, sensors      | Every 30m automation check                   |
 | **06** | `cfobot`        | Gemini 2.5 Pro    | Personal CFO: SMS spending analysis, debt payoff, wedding fund                   | 11PM nightly, 1st of month projection        |
 | **07** | `biobot`        | Mistral Small 3.2 | Health tracker: Apple Health sync, HRV readiness, quit tracker, streak tracking  | 6AM / 10PM briefs, 3PM walk nudge            |
-| **08** | _CareerBot_     | —                | 🔒 Reserved for Phase 2 (career strategy & skill gaps)                           | —                                            |
+| **08** | `watchtower`    | — (no LLM)       | Health monitor & auto-healer: PM2 process health, heartbeat checks, auto-restart | Every 15min sweep                            |
 | **09** | `wolf`          | Gemini 2.5 Pro    | Paper trading: Nifty F&O analysis via Perplexity, ₹1L virtual capital            | Weekdays 9:30AM & 3:30PM, Sunday review      |
 | **10** | `mercenary`     | Claude Sonnet 4.6 | Freelance pipeline: lead evaluation, proposal generation, invoicing              | 8PM daily lead scan                          |
 | **11** | `auditor`       | Mistral Small 3.2 | Weekly reflection: scores all agents, proposes prompt changes, auto-rollback     | Sunday 10PM                                  |
+| **12** | `careerbot`     | Claude Sonnet 4.6 | Career strategy: GitHub profile analysis, skill gap scoring, career pulse briefs | Monday 8AM weekly                            |
 | **99** | `slack-gateway` | —                | Slack Bolt app: message routing, action handlers, `/hydra-status`                | Always-on (Socket Mode)                      |
 
 > **Agent config is centralised in `core/registry.js`** — a single source of truth for names, models, namespaces, prompt files, and budget tiers.
@@ -119,9 +120,16 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 - **Circuit breaker**: 3 failures within 5 minutes → agent disabled, Slack alert sent
 - Tracks per-agent daily and monthly token/cost usage in JSON files
 
+### `core/bus.js` — Redis Event Bus
+
+- Redis pub/sub via `ioredis` for inter-agent communication
+- Channels: `hydra:agent.run`, `hydra:agent.error`, `hydra:health.alert`, `hydra:budget.warning`, `hydra:market.signal`
+- New Relic distributed trace propagation across bus events
+- All errors non-fatal — agents continue normally if Redis is down
+
 ### `core/db.js` — SQLite (better-sqlite3)
 
-- Tables: `agent_state`, `debt_tracker`, `daily_logs`, `paper_trades`, `leads`
+- Tables: `agent_state`, `debt_tracker`, `daily_logs`, `paper_trades`, `leads`, `transactions`, `conversation_history`
 - WAL mode with 5s busy timeout
 - Stored on Mac Mini internal storage (`~/hydra-brain/brain/hydra.db`)
 
@@ -191,6 +199,26 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 - Append-to-JSON-array pattern for daily logs
 - Error logging to `brain/errors/`
 
+### `core/health-server.js` — Dedicated Health Server
+
+- Standalone Express server (port 3002) — runs as its own PM2 process
+- Agents report status via `POST /health/report`; external queries via `GET /health/:agent`
+- Returns real circuit-breaker and paused state from `core/bottleneck.js`
+- Solves the port-collision issue of embedding health in each agent process
+
+### `core/nr-instrument.js` — New Relic Instrumentation
+
+- Safe wrappers: `withTransaction()`, `recordEvent()`, `recordMetric()`, `noticeError()`, `addAttributes()`
+- Distributed trace propagation via `insertTraceHeaders()` / `acceptTraceHeaders()`
+- No-ops if New Relic agent is not loaded — zero overhead when disabled
+
+### `core/hermes-bridge.js` — Hermes Messaging Gateway
+
+- Unified messaging API via the Hermes CLI binary (`hermes message send`)
+- WhatsApp, Telegram, Discord, Slack bridges
+- Retry logic: 2 attempts with 500ms/1s backoff for transient CLI failures
+- Replaces OpenClaw for outbound messaging; OpenClaw retained for MCP tools only
+
 ### `core/auth.js` — Inter-Service Auth
 
 - Bearer token authentication for inter-service API calls
@@ -198,16 +226,10 @@ A multi-agent AI system that manages Aatif Rashid's entire life — from work pr
 
 ### `mcp/hydra-mcp-server.js`
 
-- **MCP server** built on `@modelcontextprotocol/sdk` exposing 8 HYDRA tools to OpenClaw's agent
-- Register once: `openclaw mcp add --name hydra --command "node /Users/aakif/HYDRA/mcp/hydra-mcp-server.js"`
-- Tools: `hydra_home_control`, `hydra_read_sensors`, `hydra_paper_trade`, `hydra_portfolio`, `hydra_debt_status`, `hydra_search_brain`, `hydra_write_context`, `hydra_agent_status`
-- Runs as a standard stdio process invoked by OpenClaw directly
-
-### `tests/` 🚧 Sprint 2
-
-- Vitest unit tests for all 7 core modules
-- Mocked externals (OpenRouter, SQLite, OpenClaw CLI) — fast, offline, deterministic
-- Run with `npm test` or `npm run test:watch`
+- **MCP server** built on `@modelcontextprotocol/sdk` exposing 9 HYDRA tools to external AI clients
+- Register once: `openclaw mcp add --name hydra --command "node mcp/hydra-mcp-server.js"`
+- Tools: `hydra_home_control`, `hydra_read_sensors`, `hydra_paper_trade`, `hydra_portfolio`, `hydra_debt_status`, `hydra_search_brain`, `hydra_write_context`, `hydra_agent_status`, `hydra_read_messages`
+- Runs as a standard stdio process — **not** managed by PM2
 
 ---
 
@@ -246,34 +268,31 @@ HYDRA/
 │   ├── 05-jarvis.js           # Home automation
 │   ├── 06-cfobot.js           # Personal finance
 │   ├── 07-biobot.js           # Health & fitness + quit tracking
-│   ├── 08-RESERVED.md         # CareerBot (Phase 2)
+│   ├── 08-watchtower.js        # Health monitor & auto-healer (no LLM)
 │   ├── 09-wolf.js             # Paper trading (Nifty F&O)
 │   ├── 10-mercenary.js        # Freelance pipeline
 │   ├── 11-auditor.js          # Weekly reflection engine
+│   ├── 12-careerbot.js        # Career strategy & skill gaps
 │   └── 99-slack-gateway.js    # Slack Bolt gateway
 ├── core/                      # Shared infrastructure
 │   ├── agent.js               # Base Agent class (retry, shutdown, health, Winston)
 │   ├── auth.js                # API key auth
 │   ├── bottleneck.js          # Budget & circuit breaker (tiers from registry)
+│   ├── bus.js                 # Redis pub/sub event bus
 │   ├── db.js                  # SQLite database
 │   ├── filesystem.js          # Brain file I/O
+│   ├── health-server.js       # Dedicated health endpoint server (port 3002)
+│   ├── hermes-bridge.js       # Hermes messaging gateway (WhatsApp, Telegram, Discord)
 │   ├── logger.js              # Winston structured logger factory
-│   ├── memory.js              # LanceDB vector memory (legacy)
-│   ├── openclaw.js            # OpenClaw Gateway client (retry + gateway cache)
-│   ├── openclaw-memory.js     # Shared brain (OpenClaw memory bridge)
+│   ├── memory.js              # LanceDB vector memory
+│   ├── nr-instrument.js       # New Relic custom instrumentation wrappers
+│   ├── openclaw.js            # OpenClaw Gateway client (MCP only now)
+│   ├── openclaw-memory.js     # Shared brain (Markdown context writer)
 │   ├── registry.js            # Centralized agent config registry
 │   └── validate-env.js        # Per-agent env var validation
 ├── mcp/                       # MCP server
-│   ├── hydra-mcp-server.js    # MCP stdio server exposing 8 HYDRA tools to OpenClaw
+│   ├── hydra-mcp-server.js    # MCP stdio server exposing 9 HYDRA tools
 │   └── package.json
-├── tests/                     # 🚧 Sprint 2 — Vitest unit tests
-│   ├── registry.test.js
-│   ├── logger.test.js
-│   ├── validate-env.test.js
-│   ├── bottleneck.test.js
-│   ├── agent.test.js
-│   ├── filesystem.test.js
-│   └── openclaw.test.js
 ├── prompts/                   # System prompts (hot-reloadable)
 │   ├── 00-architect.txt       # Chief of Staff persona
 │   ├── 01-edmobot.txt         # Senior Backend Engineer persona
@@ -285,16 +304,21 @@ HYDRA/
 │   ├── 07-biobot.txt          # Health & wellness coach persona
 │   ├── 09-wolf.txt            # Conservative F&O risk analyst persona
 │   ├── 10-mercenary.txt       # Ruthless freelance contractor persona
-│   └── 11-auditor.txt        # Weekly reflection orchestrator persona
+│   ├── 11-auditor.txt         # Weekly reflection orchestrator persona
+│   └── 12-careerbot.txt       # Career strategy advisor persona
 ├── scripts/                   # Utilities & syncs
 │   ├── backup.sh              # Encrypted B2 backup via rclone
 │   ├── restore.sh             # Restore from B2 backup
 │   ├── cleanup.js             # Daily file cleanup & log rotation
 │   ├── health-sync.js         # Apple Health CSV → JSON
+│   ├── dashboard.js           # Token usage dashboard (Express, port 3080)
+│   ├── health-sync.js         # Apple Health CSV → JSON
 │   ├── ingest-audio.js        # Audio → local whisper.cpp + Ollama → shared brain
-│   ├── plaud-sync.js          # Plaud API → whisper.cpp → Claude → Drive + audio_inbox
+│   ├── ingest-context.js      # Unified screen+audio → LanceDB ingestion
+│   ├── plaud-sync.js          # Plaud API → whisper.cpp → OpenRouter → LanceDB
+│   ├── screenpipe-sync.js     # Screenpipe OCR → LanceDB (Mac Mini local)
 │   ├── setup-whisper.sh       # whisper.cpp + model installer (Apple Silicon Metal)
-│   └── screenpipe-sync.js     # Screenpipe OCR → JSON (Mac Mini local)
+│   └── sms-reader.js          # macOS Messages → bank SMS → SQLite transactions
 ├── hydra-screenpipe-sync/     # Laptop-side Screenpipe daemon
 │   ├── sync.js                # Ollama summarizer + SSH sync
 │   ├── package.json
@@ -302,13 +326,15 @@ HYDRA/
 │   └── README.md
 ├── docs/                      # Extended documentation
 │   └── openclaw-guide.md      # OpenClaw setup & usage (full guide)
-├── .eslintrc.cjs              # ESLint config for Node.js ESM
+├── .github/
+│   └── copilot-instructions.md  # AI coding agent instructions
+├── docker/
+│   └── observability/         # Prometheus + Grafana stack
 ├── jsconfig.json              # Editor type checking (checkJs)
-├── vitest.config.js           # 🚧 Sprint 2 — Vitest config
+├── newrelic.cjs               # New Relic agent config
 ├── ecosystem.config.cjs       # PM2 process manager config
 ├── package.json
 ├── sample.env                 # Full env var reference
-├── .env.example               # Minimal env template
 └── .gitignore
 ```
 
@@ -539,7 +565,7 @@ Key notes:
 Register `mcp/hydra-mcp-server.js` with OpenClaw once:
 
 ```bash
-openclaw mcp add --name hydra --command "node /Users/aakif/HYDRA/mcp/hydra-mcp-server.js"
+openclaw mcp add --name hydra --command "node mcp/hydra-mcp-server.js"
 ```
 
 After registration, OpenClaw's agent can use HYDRA tools naturally:
@@ -663,22 +689,31 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 - [x] ESLint + jsconfig.json
 - [x] System prompts for all 11 agents (v5.0)
 
-### 🚧 Sprint 2 — Tests, MCP, Audio
+### ✅ Sprint 2 — MCP, Audio, Observability, Pipelines
 
-- [ ] Vitest unit tests for all core modules
-- [x] HYDRA MCP server (`mcp/hydra-mcp-server.js`) — 8 tools for OpenClaw
-- [x] Plaud API → whisper.cpp → Claude → Google Drive pipeline (`plaud-sync.js`)
+- [x] HYDRA MCP server (`mcp/hydra-mcp-server.js`) — 9 tools for OpenClaw
+- [x] Plaud API → whisper.cpp → OpenRouter summary → LanceDB pipeline (`plaud-sync.js`)
 - [x] Local-only ingest-audio (whisper.cpp + Ollama, no OpenRouter)
 - [x] whisper.cpp setup script with Apple Silicon Metal support
-- [ ] OpenClaw memory enhancements (`writeAgentDecision`, `getContextForAgent`)
-- [ ] Context injection into Architect, CFO, BioBot LLM calls
+- [x] Context injection into all agents via `Agent.run()` auto-search
+- [x] SMS reader — macOS Messages bank SMS → SQLite transactions (`sms-reader.js`)
+- [x] Token usage dashboard (`scripts/dashboard.js`, port 3080)
+- [x] 08-watchtower agent — PM2 health monitoring, auto-restart, budget alerts
+- [x] 12-careerbot agent — GitHub profile analysis, skill gap scoring
+- [x] Redis event bus (`core/bus.js`) for inter-agent communication
+- [x] Dedicated health server (`core/health-server.js`, port 3002)
+- [x] New Relic APM integration (`core/nr-instrument.js`, `newrelic.cjs`)
+- [x] Hermes messaging gateway bridge (`core/hermes-bridge.js`)
+- [x] Prometheus + Grafana observability stack (`docker/observability/`)
+- [x] AI coding agent instructions (`.github/copilot-instructions.md`)
 
-### 📋 Backlog
+### 🚧 Sprint 3 — Tests & Enhancements
 
-- [ ] `08-careerbot` — Career strategy & skill gaps
-- [ ] Dashboard — Web UI for HYDRA status, logs, and controls
+- [ ] Vitest unit tests for all core modules
 - [ ] Real NSE API — Live market data for Wolf
-- [ ] SMS Automation — Auto-scrape transaction SMS for CFOBot
+- [ ] Prompt versioning — automated version tracking in `prompts/versions/`
+- [ ] Dashboard auth improvements
+- [ ] Agent-to-agent direct communication via bus
 
 ---
 
@@ -688,7 +723,7 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 | --------------- | ----------------------------------------------------------------------------------- |
 | Runtime         | Node.js ≥ 22 (ESM)                                                                  |
 | Host            | Mac Mini (all agents run locally)                                                   |
-| LLM Gateway     | OpenRouter (Gemini Flash 3, Claude Sonnet 4, DeepSeek R1, Mistral Small, Haiku 4.5) |
+| LLM Gateway     | OpenRouter (Gemini 2.5 Flash/Pro, Claude Sonnet 4.6/Haiku 4.5, Mistral Small 3.2) |
 | Process Manager | PM2                                                                                 |
 | Database        | better-sqlite3 (WAL mode)                                                           |
 | Vector Store    | LanceDB                                                                             |
@@ -696,10 +731,12 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 | Chat Interface  | Slack Bolt (Socket Mode)                                                            |
 | Home Automation | Home Assistant REST API                                                             |
 | Market Research | Perplexity API (Sonar)                                                              |
-| Messaging       | OpenClaw Gateway (WhatsApp, iMessage, Discord, Telegram)                            |
+| Messaging       | Hermes Agent Gateway (WhatsApp, Telegram, Discord) + OpenClaw (MCP only)            |
 | MCP Server      | @modelcontextprotocol/sdk + stdio transport                                         |
 | Transcription   | whisper.cpp local (Apple Silicon Metal GPU)                                         |
-| Plaud Sync      | Plaud REST API → Claude Sonnet → Google Drive                                       |
+| Event Bus       | Redis pub/sub via ioredis                                                           |
+| Observability   | New Relic APM + Prometheus + Grafana + GlitchTip/Sentry                             |
+| Plaud Sync      | Plaud REST API → whisper.cpp → OpenRouter summary → LanceDB                        |
 | Local Summary   | Ollama (gemma3:4b) for offline summarization in ingest-audio                        |
 | Backup          | rclone + Google Drive (encrypted)                                                   |
 | Logging         | Winston (JSON in PM2, pretty-print in dev)                                          |
@@ -711,6 +748,47 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 ---
 
 ## 📋 Changelog
+
+### 2026-03-01 — Observability Stack, CareerBot, Redis Bus, Health Server, Hermes Gateway, AI Copilot Instructions
+
+**New Agents**
+- `12-careerbot` — Career strategy advisor: GitHub profile analysis, skill gap scoring, weekly career pulse briefs (Claude Sonnet 4.6)
+- `08-watchtower` — Lightweight health monitor & auto-healer: PM2 process health checks, heartbeat staleness, budget velocity, disk space alerts, auto-restart with crash-loop detection (no LLM, zero cost)
+
+**New Core Modules**
+- `core/bus.js` — Redis pub/sub event bus (`ioredis`) for inter-agent communication. Channels: `agent.run`, `agent.error`, `health.alert`, `budget.warning`, `market.signal`. Includes New Relic distributed trace propagation.
+- `core/health-server.js` — Dedicated Express server (port 3002) for agent health reporting. Agents POST status; external queries via GET. Solves port-collision issue.
+- `core/nr-instrument.js` — New Relic custom instrumentation wrappers: `withTransaction()`, `recordEvent()`, `recordMetric()`, `noticeError()`, `addAttributes()`. Safe no-ops if NR not loaded.
+- `core/hermes-bridge.js` — Hermes Agent messaging gateway: unified API for WhatsApp, Telegram, Discord, Slack via Hermes CLI binary. Replaces OpenClaw for outbound messaging.
+- `newrelic.cjs` — New Relic agent config, loaded via `--require newrelic` in PM2
+
+**New Scripts & Pipelines**
+- `scripts/dashboard.js` — Token usage dashboard (Express, port 3080) with per-agent costs, health status, and authentication
+- `scripts/sms-reader.js` — macOS Messages `chat.db` → Indian bank SMS parsing → SQLite `transactions` table + `sms_inbox.json` for CFO bot
+- `scripts/ingest-context.js` — Unified watcher for `shared_context/{screen,audio}/` → LanceDB ingestion with embeddings
+- `scripts/screenpipe-sync.js` — Now tracks byte offset per date to avoid double-ingestion into LanceDB
+
+**Infrastructure**
+- Prometheus + Grafana observability stack (`docker/observability/`)
+- PM2 Prometheus exporter for process metrics
+- GlitchTip/Sentry error tracking (optional, via `GLITCHTIP_DSN` env var)
+- All agents emit `agent.run` and `agent.error` events to Redis bus
+- Each agent run is wrapped in a New Relic background transaction
+
+**MCP Server Updates**
+- New tool: `hydra_read_messages` — read recent messages from any Hermes channel/contact
+- Total tools now: 9 (was 8)
+
+**Model Changes**
+- Jarvis: `anthropic/claude-haiku-4-5` → `google/gemini-2.5-flash` (cheaper, 200K context)
+- All models updated to latest versions in `core/bottleneck.js` MODEL_RATES
+
+**Developer Experience**
+- `.github/copilot-instructions.md` — AI coding agent instructions covering architecture, patterns, conventions, model preferences, and dev workflow
+- `.gitignore` updated: excludes `*.db`, `*.bak`, `.claude/`
+- `prompts/versions/` directory for future prompt version tracking
+- Channel-based bot routing in Slack gateway (messages in `#XX-agent` route to that agent)
+- Agent conversation history persisted to SQLite `conversation_history` table
 
 ### 2026-02-26 — Screenpipe Integration + LanceDB Memory + EdmoBot Coding Pipeline
 
