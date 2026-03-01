@@ -682,7 +682,12 @@ async function loadAgent() {
   const hb = heartbeats[AGENT_NAME] || {};
 
   const statsEl = document.getElementById('agent-stats');
-  const statusColor = h.status === 'healthy' ? '#00c853' : h.status === 'stopped' ? '#ff1744' : '#556';
+  const statusColor =
+    h.status === 'healthy'
+      ? '#00c853'
+      : (h.status === 'stopped' || h.status === 'errored' || h.status === 'circuit-open')
+        ? '#ff1744'
+        : '#556';
   const hbAge = hb.ageSeconds != null ? (hb.ageSeconds < 60 ? hb.ageSeconds + 's' : Math.floor(hb.ageSeconds/60) + 'm') : 'N/A';
 
   statsEl.innerHTML = [
