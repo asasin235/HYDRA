@@ -540,11 +540,11 @@ async function loadAll() {
   const pct = Math.min(100, (totalCost / budget * 100));
 
   document.getElementById('c-spend').textContent = '$' + totalCost.toFixed(2);
-  let todayTotal = 0;
-  Object.values(agents).forEach(a => todayTotal += a.costToday || 0);
+  var todayTotal = 0;
+  Object.values(agents).forEach(function(a) { todayTotal += a.costToday || 0; });
   document.getElementById('c-today').textContent = '$' + todayTotal.toFixed(4);
 
-  const remEl = document.getElementById('c-remaining');
+  var remEl = document.getElementById('c-remaining');
   remEl.textContent = '$' + remaining.toFixed(2);
   remEl.className = 'value mono ' + (remaining > 20 ? 'emerald' : remaining > 5 ? 'amber' : 'crimson');
 
@@ -559,7 +559,7 @@ async function loadAll() {
   document.getElementById('b-used').textContent = totalCost.toFixed(2);
   document.getElementById('b-total').textContent = budget;
   document.getElementById('b-pct').textContent = pct.toFixed(1) + '%';
-  const fill = document.getElementById('b-fill');
+  var fill = document.getElementById('b-fill');
   fill.style.width = pct + '%';
   if (pct >= 80) fill.style.background = 'linear-gradient(90deg,#ff1744,#ff6d00)';
   else if (pct >= 60) fill.style.background = 'linear-gradient(90deg,#ffd600,#ff6d00)';
