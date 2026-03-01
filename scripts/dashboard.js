@@ -456,10 +456,14 @@ app.get('/api/integrations', async (req, res) => {
     redis.disconnect();
   } catch (e) { status.redis = { connected: false, error: e.message }; }
   // OpenRouter
-  try {
-    const r = await fetch('https://openrouter.ai/api/v1/models', { method: 'GET', headers: { 'Authorization': 'Bearer ' + (process.env.OPENROUTER_API_KEY || '') }, signal: AbortSignal.timeout(5000) });
-    status.openrouter = { connected: r.ok, statusCode: r.status };
-  } catch (e) { status.openrouter = { connected: false, error: e.message }; }
+  if (!process.env.OPENROUTER_API_KEY) {
+    status.openrouter = { connected: false, error: 'API key not configured' };
+  } else {
+    try {
+      const r = await fetch('https://openrouter.ai/api/v1/models', { method: 'GET', headers: { 'Authorization': 'Bearer ' + process.env.OPENROUTER_API_KEY }, signal: AbortSignal.timeout(5000) });
+      status.openrouter = { connected: r.ok, statusCode: r.status };
+    } catch (e) { status.openrouter = { connected: false, error: e.message }; }
+  }
   // Slack
   status.slack = { configured: !!process.env.SLACK_BOT_TOKEN, appToken: !!process.env.SLACK_APP_TOKEN };
   // LanceDB
@@ -1756,11 +1760,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 const wsClients = new Set();
 wss.on('connection', (ws, req) => {
   // Only allow authenticated WebSocket connections
-  const cookies = {};
-  (req.headers.cookie || '').split(';').forEach(c => {
-    const [k, v] = c.trim().split('=');
-    if (k && v) cookies[k.trim()] = v.trim();
-  });
+  const cookies = parseCookies(req);
   if (!cookies['hydra_sid'] || !sessions.has(cookies['hydra_sid'])) {
     ws.close(4001, 'Unauthorized');
     return;
@@ -1771,14 +1771,14 @@ wss.on('connection', (ws, req) => {
 });
 
 // Broadcast new logs to all WebSocket clients
-let lastLogId = 0;
+let lastLogTs = 0;
 setInterval(() => {
   try {
     const logs = getRecentLogs(5);
     for (const log of logs) {
-      const logId = log.id || log.created_at || '';
-      if (logId && logId > lastLogId) {
-        lastLogId = logId;
+      const ts = new Date(log.created_at || 0).getTime() || 0;
+      if (ts > lastLogTs) {
+        lastLogTs = ts;
         const msg = JSON.stringify(log);
         for (const client of wsClients) {
           if (client.readyState === 1) client.send(msg);
