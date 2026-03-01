@@ -796,21 +796,60 @@ function filterLogs() {
     if(st && (l.summary||'').toLowerCase().indexOf(st)===-1) return false;
     return true;
   });
-  if(!filtered.length){ box.innerHTML='<div style="color:#475569;padding:32px;text-align:center">No logs found</div>'; return; }
+  if(!filtered.length){
+    box.innerHTML = '<div style="color:#475569;padding:32px;text-align:center">No logs found</div>';
+    return;
+  }
   var agents = usageData ? usageData.agents || {} : {};
-  box.innerHTML = filtered.map(function(l){
+  box.innerHTML = '';
+  filtered.forEach(function(l){
     var ai = agents[l.agent] || {};
     var mn = ai.model ? ai.model.split('/').pop() : '';
-    var summ = (l.summary||'');
-    if(summ.length > 300) summ = summ.slice(0,300) + '...';
-    return '<div class="log-card">' +
-      '<div class="log-top"><div><span class="log-agent">' + (l.agent||'unknown') + '</span>' +
-        (mn ? '<span class="log-model">' + mn + '</span>' : '') +
-      '</div><span class="log-date">' + (l.created_at||l.date||'') + '</span></div>' +
-      '<div class="log-body">' + summ + '</div>' +
-      (l.tokens_used ? '<span class="log-tok">' + (l.tokens_used||0).toLocaleString() + ' tokens</span>' : '') +
-    '</div>';
-  }).join('');
+    var summ = (l.summary || '');
+    if (summ.length > 300) summ = summ.slice(0, 300) + '...';
+
+    var card = document.createElement('div');
+    card.className = 'log-card';
+
+    var top = document.createElement('div');
+    top.className = 'log-top';
+
+    var left = document.createElement('div');
+
+    var agentSpan = document.createElement('span');
+    agentSpan.className = 'log-agent';
+    agentSpan.textContent = l.agent || 'unknown';
+    left.appendChild(agentSpan);
+
+    if (mn) {
+      var modelSpan = document.createElement('span');
+      modelSpan.className = 'log-model';
+      modelSpan.textContent = mn;
+      left.appendChild(modelSpan);
+    }
+
+    var dateSpan = document.createElement('span');
+    dateSpan.className = 'log-date';
+    dateSpan.textContent = l.created_at || l.date || '';
+
+    top.appendChild(left);
+    top.appendChild(dateSpan);
+    card.appendChild(top);
+
+    var body = document.createElement('div');
+    body.className = 'log-body';
+    body.textContent = summ;
+    card.appendChild(body);
+
+    if (l.tokens_used) {
+      var tokSpan = document.createElement('span');
+      tokSpan.className = 'log-tok';
+      tokSpan.textContent = (l.tokens_used || 0).toLocaleString() + ' tokens';
+      card.appendChild(tokSpan);
+    }
+
+    box.appendChild(card);
+  });
 }
 document.getElementById('log-agent-filter').addEventListener('change', filterLogs);
 document.getElementById('log-search').addEventListener('input', filterLogs);
