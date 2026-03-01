@@ -468,10 +468,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="sidebar-brand">\u{1F409} <span>HYDRA</span></div>
   </div>
   <nav class="sidebar-nav">
-    <button class="nav-item active" data-section="overview" role="tab" aria-selected="true"><span class="nav-icon" aria-hidden="true">\u{1F4CA}</span>Overview</button>
-    <button class="nav-item" data-section="agents" role="tab" aria-selected="false"><span class="nav-icon" aria-hidden="true">\u{1F916}</span>Agents</button>
-    <button class="nav-item" data-section="logs" role="tab" aria-selected="false"><span class="nav-icon" aria-hidden="true">\u{1F4CB}</span>Logs</button>
-    <button class="nav-item" data-section="health" role="tab" aria-selected="false"><span class="nav-icon" aria-hidden="true">\u{1F6E1}</span>System Health</button>
+    <button class="nav-item active" data-section="overview"><span class="nav-icon" aria-hidden="true">\u{1F4CA}</span>Overview</button>
+    <button class="nav-item" data-section="agents"><span class="nav-icon" aria-hidden="true">\u{1F916}</span>Agents</button>
+    <button class="nav-item" data-section="logs"><span class="nav-icon" aria-hidden="true">\u{1F4CB}</span>Logs</button>
+    <button class="nav-item" data-section="health"><span class="nav-icon" aria-hidden="true">\u{1F6E1}</span>System Health</button>
   </nav>
   <div class="sidebar-footer">
     <a href="/logout" class="logout-link">\u{1F6AA} Sign Out</a>
