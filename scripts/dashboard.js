@@ -333,25 +333,66 @@ app.get('/api/heartbeats', async (req, res) => {
 
 // Restart agent via PM2 (rate-limited: 1 restart per agent per 10 seconds)
 const restartTimestamps = new Map();
+
+// Basic CSRF protection: enforce same-origin via Origin/Referer headers
+function isSameOrigin(req) {
+  const originHeader = req.headers.origin || req.headers.referer;
+  if (!originHeader) return false;
+  try {
+    const url = new URL(originHeader);
+    return url.host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 app.post('/api/restart/:name', async (req, res) => {
   const agentName = req.params.name;
+  const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
+
+  // CSRF defense: reject cross-origin requests
+  if (!isSameOrigin(req)) {
+    console.warn(`[dashboard] Blocked cross-origin restart attempt`, {
+      agentName,
+      clientIp,
+      origin: req.headers.origin,
+      referer: req.headers.referer
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
   // Validate the agent name exists in registry or is a known PM2 process
   const knownNames = [...Object.keys(AGENTS), 'ingest-audio', 'plaud-sync', 'sms-reader', 'screenpipe-sync', 'ingest-context', 'health-server'];
   if (!knownNames.includes(agentName)) {
+    console.warn(`[dashboard] Restart denied for unknown agent`, { agentName, clientIp });
     return res.status(400).json({ error: 'Unknown agent: ' + agentName });
   }
+
   // Rate limit: 1 restart per agent per 10 seconds
   const now = Date.now();
   const lastRestart = restartTimestamps.get(agentName) || 0;
   if (now - lastRestart < 10000) {
+    console.warn(`[dashboard] Restart rate-limited`, {
+      agentName,
+      clientIp,
+      lastRestart,
+      now
+    });
     return res.status(429).json({ error: 'Too many restarts. Wait 10 seconds between restart attempts.' });
   }
   restartTimestamps.set(agentName, now);
+
   try {
     const { execFileSync } = await import('child_process');
     execFileSync('pm2', ['restart', agentName], { timeout: 10000 });
+    console.info(`[dashboard] Agent restarted successfully`, { agentName, clientIp });
     res.json({ success: true, message: `${agentName} restarted successfully` });
   } catch (e) {
+    console.error(`[dashboard] Restart failed`, {
+      agentName,
+      clientIp,
+      error: e && e.message ? e.message : String(e)
+    });
     res.status(500).json({ error: 'Restart failed: ' + e.message });
   }
 });
