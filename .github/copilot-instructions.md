@@ -1,5 +1,26 @@
 # HYDRA — Copilot Instructions
 
+## Build & Validate
+
+```sh
+# Install dependencies
+npm install
+
+# Lint (ESLint configured for ESM — always run before committing)
+npm run lint
+
+# Auto-fix lint issues
+npm run lint:fix
+
+# No automated unit test suite — validate changes by running the agent/script directly:
+node agents/XX-name.js                  # Run an agent directly (Ctrl+C to stop)
+node scripts/some-script.js --test      # Many scripts support --test flag
+node scripts/sms-reader.js --once       # One-shot mode for scripts
+pm2 restart XX-name && pm2 logs XX-name # Verify within PM2 (if running)
+```
+
+> **There is no `npm test` command.** Validation is manual: run the specific file you changed and confirm expected output in logs.
+
 ## What This Is
 
 HYDRA is a multi-agent AI personal operating system. Each agent is a standalone Node.js process managed by PM2, communicating via Slack (Socket Mode) and a Redis event bus. Agents call LLMs through OpenRouter (OpenAI-compatible API) and persist state in SQLite + LanceDB (vector memory). The system runs on a Mac Mini (macOS, Apple Silicon, Node 22+).
