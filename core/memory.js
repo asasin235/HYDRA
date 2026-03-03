@@ -16,6 +16,7 @@ let reflectionsTable = null;
 let screenActivityTable = null;
 let audioTranscriptsTable = null;
 let contextFeedTable = null;
+let pdfDocumentsTable = null;
 
 /**
  * Get embedding from OpenRouter using text-embedding-3-small
@@ -163,6 +164,25 @@ async function initDb() {
     ]);
   } else {
     reflectionsTable = await db.openTable('reflections');
+  }
+
+  // ── PDF Documents table ────────────────────────────────────────────
+  if (!tables.includes('pdf_documents')) {
+    pdfDocumentsTable = await db.createTable('pdf_documents', [
+      {
+        id: 'init',
+        source: 'system',
+        timestamp: new Date().toISOString(),
+        filename: '',
+        page_num: 0,
+        chunk_idx: 0,
+        content: 'PDF document tracking initialized',
+        metadata_json: '{}',
+        vector: new Array(EMBEDDING_DIM).fill(0)
+      }
+    ]);
+  } else {
+    pdfDocumentsTable = await db.openTable('pdf_documents');
   }
 }
 
@@ -560,6 +580,92 @@ export async function searchAllContext(query, { limit = 10, source_type, since }
   }
 }
 
+// ── PDF Documents ─────────────────────────────────────────────────────
+
+/**
+ * Add a PDF document chunk with vector embedding
+ * @param {Object} entry
+ * @param {string} entry.source - Ingestion source (e.g. 'pdf-inbox')
+ * @param {string} entry.timestamp - ISO timestamp of ingestion
+ * @param {string} entry.filename - PDF filename
+ * @param {number} entry.page_num - Page number (1-based, 0 for full-doc chunks)
+ * @param {number} entry.chunk_idx - Chunk index within the page/document
+ * @param {string} entry.content - Text content of the chunk
+ * @param {Object} [entry.metadata] - Extra metadata (title, author, etc.)
+ * @returns {Promise<string>} Entry ID
+ */
+export async function addPdfChunk({ source, timestamp, filename, page_num = 0, chunk_idx = 0, content, metadata = {} }) {
+  try {
+    await initDb();
+    const id = uuidv4();
+    const embedding = await getEmbedding(content);
+
+    await pdfDocumentsTable.add([{
+      id,
+      source,
+      timestamp: timestamp || new Date().toISOString(),
+      filename: filename || '',
+      page_num,
+      chunk_idx,
+      content: content.slice(0, 8000),
+      metadata_json: JSON.stringify(metadata),
+      vector: embedding
+    }]);
+
+    // Also add to unified context_feed for cross-source search
+    await contextFeedTable.add([{
+      id: uuidv4(),
+      source_type: 'pdf',
+      source,
+      timestamp: timestamp || new Date().toISOString(),
+      content: content.slice(0, 8000),
+      metadata_json: JSON.stringify({ filename, page_num, chunk_idx, ...metadata }),
+      vector: embedding
+    }]);
+
+    return id;
+  } catch (error) {
+    console.error('[memory] addPdfChunk failed:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Search PDF document chunks using semantic similarity
+ * @param {string} query - Natural language query
+ * @param {Object} [opts]
+ * @param {number} [opts.limit=5] - Max results
+ * @param {string} [opts.filename] - Filter by PDF filename
+ * @returns {Promise<Array>} Matching PDF chunks
+ */
+export async function searchPdfContent(query, { limit = 5, filename } = {}) {
+  try {
+    await initDb();
+    const queryEmbedding = await getEmbedding(query);
+    const results = await pdfDocumentsTable.search(queryEmbedding).limit(limit * 3).toArray();
+
+    let filtered = results.filter(r => r.id !== 'init');
+    if (filename) {
+      filtered = filtered.filter(r => r.filename === filename);
+    }
+
+    return filtered.slice(0, limit).map(r => ({
+      id: r.id,
+      source: r.source,
+      timestamp: r.timestamp,
+      filename: r.filename,
+      page_num: r.page_num,
+      chunk_idx: r.chunk_idx,
+      content: r.content,
+      metadata: JSON.parse(r.metadata_json || '{}'),
+      score: r._distance
+    }));
+  } catch (error) {
+    console.error('[memory] searchPdfContent failed:', error.message);
+    return [];
+  }
+}
+
 /**
  * Close the database connection
  */
@@ -572,5 +678,6 @@ export async function closeMemory() {
     screenActivityTable = null;
     audioTranscriptsTable = null;
     contextFeedTable = null;
+    pdfDocumentsTable = null;
   }
 }
