@@ -83,7 +83,7 @@ export function noticeError(err, attrs) {
  * @returns {object} Headers object (empty if NR not loaded)
  */
 export function insertTraceHeaders() {
-  if (!newrelic) return {};
+  if (!newrelic || typeof newrelic.insertDistributedTraceHeaders !== 'function') return {};
   const headers = {};
   newrelic.insertDistributedTraceHeaders(headers);
   return headers;
@@ -96,7 +96,8 @@ export function insertTraceHeaders() {
  * @param {'HTTP'|'HTTPS'|'Kafka'|'JMS'|'IronMQ'|'AMQP'|'Queue'|'Other'} [transport='Other']
  */
 export function acceptTraceHeaders(headers, transport = 'Other') {
-  if (!newrelic || !headers || Object.keys(headers).length === 0) return;
+  if (!newrelic || typeof newrelic.acceptDistributedTraceHeaders !== 'function') return;
+  if (!headers || Object.keys(headers).length === 0) return;
   newrelic.acceptDistributedTraceHeaders(transport, headers);
 }
 

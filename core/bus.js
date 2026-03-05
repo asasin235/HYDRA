@@ -63,7 +63,7 @@ function ensureSub() {
           log.error('Bus handler error', { channel, error: e.message });
         }
       };
-      if (newrelic) {
+      if (newrelic && typeof newrelic.startBackgroundTransaction === 'function') {
         const shortChannel = channel.replace('hydra:', '');
         newrelic.startBackgroundTransaction(`HYDRA/bus/${shortChannel}`, 'Bus', async () => {
           acceptTraceHeaders(traceHeaders);
