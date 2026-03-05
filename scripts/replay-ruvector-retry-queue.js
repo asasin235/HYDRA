@@ -19,7 +19,6 @@
  */
 
 import fs from 'fs-extra';
-import path from 'path';
 import { initRuVector, upsert, isAvailable, closeRuVector, getRetryPath } from '../core/ruvectorStore.js';
 
 async function replay() {

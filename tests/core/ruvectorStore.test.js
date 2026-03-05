@@ -29,7 +29,7 @@ describe('core/ruvectorStore', () => {
   describe('nowIso', () => {
     it('returns an ISO date string', () => {
       const result = ruvStore.nowIso();
-      expect(() => new Date(result)).not.toThrow();
+      expect(Number.isNaN(Date.parse(result))).toBe(false);
       expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     });
   });

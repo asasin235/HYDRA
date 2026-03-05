@@ -75,6 +75,7 @@ export async function initRuVector() {
       console.error('[ruvector] Init failed (HYDRA will continue with LanceDB only):', err.message);
       _available = false;
       ruvectorDb = null;
+      _initPromise = null; // allow retry on next call
       return null;
     }
   })();
