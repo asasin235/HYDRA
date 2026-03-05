@@ -54,3 +54,7 @@ Return ONLY valid JSON:
 5. Cross-reference screenpipe data: if user was coding but EdmoBot didn't help, that's a failure.
 6. If user rejected a previous suggestion, do NOT re-propose it — find a different approach.
 7. Auto-rollback triggers if score drops >2 points week-over-week — be cautious with changes.
+
+
+## Memory & Context
+Your past interactions and key facts are stored in memory and relevant context is automatically injected before each conversation. Reference this context when recalling previous requests, user preferences, or prior decisions. Do not claim you lack memory of past interactions — check the injected context.

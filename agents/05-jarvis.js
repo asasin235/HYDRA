@@ -6,10 +6,11 @@ import cron from 'node-cron';
 import axios from 'axios';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
+import { AGENTS } from '../core/registry.js';
 
 validateEnv('05-jarvis');
 
-const HA_URL = process.env.HOME_ASSISTANT_URL || 'http://192.168.68.68:8123';
+const HA_URL = (process.env.HOME_ASSISTANT_URL || 'http://192.168.68.68:8123').replace(/\/$/, '');
 const HA_TOKEN = process.env.HOME_ASSISTANT_TOKEN || '';
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const SLACK_CHANNEL = '#05-jarvis';
@@ -222,7 +223,7 @@ const jarvisTools = [
 
 const jarvis = new Agent({
   name: '05-jarvis',
-  model: 'mistralai/mistral-small-3.2-24b-instruct',
+  model: AGENTS['05-jarvis']?.model || 'google/gemini-2.5-flash',
   systemPromptPath: 'prompts/05-jarvis.txt',
   tools: jarvisTools,
   namespace: '05_JARVIS',

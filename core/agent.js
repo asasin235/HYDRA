@@ -3,7 +3,7 @@ import path from 'path';
 import OpenAI from 'openai';
 import { checkBudget, recordUsage } from './bottleneck.js';
 import { brainPath, appendBrain, writeBrain } from './filesystem.js';
-import { searchScreenContext } from './memory.js';
+import { searchScreenContext, addMemory } from './memory.js';
 import { addLog, addConversationMessage, getRecentConversation, pruneConversation } from './db.js';
 import { AGENTS } from './registry.js';
 import { createLogger } from './logger.js';
@@ -309,7 +309,7 @@ export default class Agent {
       const transcript = [...messages, assistantMessage];
 
       // Handle tool calls — multi-round loop
-      const MAX_TOOL_ITERATIONS = 10;
+      const MAX_TOOL_ITERATIONS = 15;
       let iterations = 0;
 
       while (
@@ -344,6 +344,27 @@ export default class Agent {
             name: toolName,
             content: toolResult
           });
+        }
+
+        // After tool results are appended, scrub large argument strings from the
+        // PREVIOUS assistant message's tool_calls so they don't snowball the context.
+        // write_repo_file sends full file contents (~1-3K tokens each); keeping them
+        // in every subsequent LLM call is the main driver of 200K+ token runs.
+        const prevAssistant = transcript[transcript.length - 2];
+        if (prevAssistant?.role === 'assistant' && Array.isArray(prevAssistant.tool_calls)) {
+          for (const tc of prevAssistant.tool_calls) {
+            try {
+              const args = JSON.parse(tc.function.arguments);
+              let changed = false;
+              for (const [k, v] of Object.entries(args)) {
+                if (typeof v === 'string' && v.length > 500) {
+                  args[k] = `[${v.length} chars]`;
+                  changed = true;
+                }
+              }
+              if (changed) tc.function.arguments = JSON.stringify(args);
+            } catch { /* non-fatal */ }
+          }
         }
 
         // Re-call LLM with tool results — keep tools available for multi-step reasoning
@@ -474,6 +495,11 @@ export default class Agent {
       await appendBrain(this.namespace, filename, entry);
       // Also write to SQLite daily_logs for structured queries
       try { addLog(this.name, date, response.slice(0, 500), (usage?.outputTokens || 0)); } catch { }
+      // Store interaction summary in LanceDB for semantic memory search
+      try {
+        const summary = `[${date}] ${user ? `User: ${user.slice(0, 150)}\n` : ''}Agent: ${response.slice(0, 350)}`;
+        await addMemory(this.name, summary);
+      } catch { }
     } catch (error) {
       this.log.error('log error', { error: error.message });
     }

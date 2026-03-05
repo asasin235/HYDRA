@@ -32,8 +32,32 @@ const app = new App({
   token: SLACK_BOT_TOKEN,
   signingSecret: SLACK_SIGNING_SECRET,
   appToken: SLACK_APP_TOKEN,
-  socketMode: true
+  socketMode: true,
 });
+
+// WS-aware watchdog: checks actual WebSocket readyState every 30s.
+// Restarts after 90s of confirmed dead state — PM2 restarts fresh,
+// which resets numOfConsecutiveReconnectionFailures to 0.
+// (auth.test only tests HTTP, not WebSocket — do NOT use it here)
+let wsDownSince = null;
+setInterval(() => {
+  try {
+    const wsActive = app.receiver?.client?.websocket?.isActive() ?? false;
+    if (wsActive) {
+      wsDownSince = null;
+    } else {
+      if (!wsDownSince) wsDownSince = Date.now();
+      const downMs = Date.now() - wsDownSince;
+      console.warn(`[slack-gateway] WebSocket inactive for ${Math.round(downMs / 1000)}s`);
+      if (downMs >= 90_000) {
+        console.error('[slack-gateway] WebSocket dead 90s — restarting');
+        process.exit(1);
+      }
+    }
+  } catch (e) {
+    console.warn('[slack-gateway] watchdog check error (non-fatal):', e.message);
+  }
+}, 30_000);
 
 // Raw event logger — helps debug what events arrive from Slack
 app.use(async ({ payload, next }) => {
@@ -100,7 +124,8 @@ import {
 } from '../core/jira.js';
 import {
   isGitHubConfigured, getFileContent, searchCode, listFiles,
-  getUserProfile, getUserRepos, getContributionStats
+  getUserProfile, getUserRepos, getContributionStats,
+  createBranch, updateFile, createPR
 } from '../core/github.js';
 
 const EDMOBOT_TOOLS = [
@@ -180,7 +205,41 @@ const EDMOBOT_TOOLS = [
     execute: async ({ repo, directory, branch }) => {
       if (!isGitHubConfigured()) return 'GitHub not configured.';
       const files = await listFiles(repo, directory, branch);
-      return files.map(f => `${f.type === 'dir' ? '📁' : '📄'} ${f.path}`).join('\n');
+      const listing = files.map(f => `${f.type === 'dir' ? '📁' : '📄'} ${f.path}`).join('\n');
+      return listing.slice(0, 4000);
+    }
+  },
+  {
+    name: 'create_branch',
+    description: 'Create a new git branch in a GitHub repository from an existing base branch.',
+    parameters: { type: 'object', properties: { repo: { type: 'string', description: 'owner/repo' }, branch_name: { type: 'string' }, base_branch: { type: 'string', description: 'Base branch to create from (default: main)' } }, required: ['repo', 'branch_name'] },
+    execute: async ({ repo, branch_name, base_branch = 'main' }) => {
+      if (!isGitHubConfigured()) return 'GitHub not configured.';
+      const result = await createBranch(repo, branch_name, base_branch);
+      return `✅ Branch "${branch_name}" created from "${base_branch}" (${result.sha.slice(0, 7)})`;
+    }
+  },
+  {
+    name: 'write_repo_file',
+    description: 'Create or update a file in a GitHub repository branch. Use this to commit agents.md, README.md, or any documentation file.',
+    parameters: { type: 'object', properties: { repo: { type: 'string', description: 'owner/repo' }, file_path: { type: 'string', description: 'Path to file e.g. docs/agents.md' }, content: { type: 'string', description: 'Full file content' }, message: { type: 'string', description: 'Commit message' }, branch: { type: 'string', description: 'Branch to commit to' } }, required: ['repo', 'file_path', 'content', 'message', 'branch'] },
+    execute: async ({ repo, file_path, content, message, branch }) => {
+      if (!isGitHubConfigured()) return 'GitHub not configured.';
+      // Try to get existing file SHA (needed for updates)
+      let sha;
+      try { const existing = await getFileContent(repo, file_path, branch); sha = existing.sha; } catch { /* new file */ }
+      const result = await updateFile(repo, file_path, content, message, branch, sha);
+      return `✅ "${file_path}" ${sha ? 'updated' : 'created'} on branch "${branch}" (commit: ${result.commit_sha?.slice(0, 7)})`;
+    }
+  },
+  {
+    name: 'create_pull_request',
+    description: 'Create a GitHub pull request from a feature branch into the base branch.',
+    parameters: { type: 'object', properties: { repo: { type: 'string', description: 'owner/repo' }, title: { type: 'string' }, body: { type: 'string', description: 'PR description in markdown' }, head: { type: 'string', description: 'Feature branch name' }, base: { type: 'string', description: 'Target branch (default: main)' } }, required: ['repo', 'title', 'body', 'head'] },
+    execute: async ({ repo, title, body, head, base = 'main' }) => {
+      if (!isGitHubConfigured()) return 'GitHub not configured.';
+      const pr = await createPR(repo, title, body, head, base);
+      return `✅ PR #${pr.number} created: ${pr.html_url}`;
     }
   }
 ];
@@ -250,7 +309,7 @@ const CFOBOT_TOOLS = [
 
 
 // ── Jarvis HA tools ────────────────────────────────────────────────────────
-const HA_URL = process.env.HOME_ASSISTANT_URL || 'http://192.168.68.68:8123';
+const HA_URL = (process.env.HOME_ASSISTANT_URL || 'http://192.168.68.68:8123').replace(/\/$/, '');
 const HA_TOKEN = process.env.HOME_ASSISTANT_TOKEN || '';
 const haHeaders = () => ({ Authorization: `Bearer ${HA_TOKEN}`, 'Content-Type': 'application/json' });
 
@@ -469,7 +528,9 @@ async function getOrCreateAgent(name) {
     systemPromptPath,
     tools,
     namespace: cfg.namespace || name,
-    tokenBudget: tools.length > 0 ? 300000 : 8000
+    tokenBudget: tools.length > 0 ? 300000 : 8000,
+    useScreenContext: cfg.useScreenContext !== undefined ? cfg.useScreenContext : true,
+    maxHistoryTurns: cfg.maxHistoryTurns,
   });
   agentRegistry.set(name, agent);
   return agent;
@@ -548,7 +609,10 @@ app.event('app_mention', async ({ event, say }) => {
       await say({ thread_ts: event.ts, text: '👋 Hi! Send me a message like `@hydra how are you?` or DM me directly.' });
       return;
     }
-    await dispatch({ message: event, say, agentName: '00-architect', userText });
+    // Route to the agent whose channel this mention came from, fallback to 00-architect
+    const channelName = await resolveChannelName(event.channel);
+    const agentName = channelToAgent.get(channelName) || '00-architect';
+    await dispatch({ message: event, say, agentName, userText });
   } catch (error) {
     console.error('[slack-gateway] app_mention error:', error.message);
     await say({ thread_ts: event.ts, text: `❌ Error: ${error.message}` });
@@ -884,7 +948,38 @@ app.command('/hydra-status', async ({ ack, respond }) => {
 (async () => {
   try {
     await app.start();
+    // clientPingTimeoutMS: tolerance for WS ping/pong (10s balanced).
+    // NOTE: the SDK also uses this as reconnect delay multiplier:
+    //   msBeforeRetry = clientPingTimeoutMS * numOfConsecutiveReconnectionFailures
+    // Reset numOfConsecutiveReconnectionFailures=0 to undo yesterday's accumulated delays.
+    try {
+      app.receiver.client.clientPingTimeoutMS = 10000;
+      app.receiver.client.numOfConsecutiveReconnectionFailures = 0;
+      app.receiver.client.on('connected', () => console.log('[slack-gateway] WebSocket connected ✓'));
+      app.receiver.client.on('disconnected', (err) => console.warn(`[slack-gateway] WebSocket disconnected: ${err?.message || 'unknown'}`));
+      app.receiver.client.on('reconnecting', () => console.log('[slack-gateway] WebSocket reconnecting...'));
+    } catch (e) { /* non-fatal */ }
     console.log('[slack-gateway] Bolt app running in socket mode');
+
+    // Join all agent channels so app.message() fires for plain (non-mention) messages.
+    // Without channel membership, Slack only delivers app_mention events, not message events.
+    const agentChannels = Object.values(AGENTS)
+      .map(cfg => cfg.slackChannel)
+      .filter(Boolean);
+    for (const channelName of agentChannels) {
+      try {
+        // Resolve channel name → ID first (need ID for conversations.join)
+        const list = await app.client.conversations.list({ types: 'public_channel,private_channel', limit: 200 });
+        const channel = list.channels?.find(c => c.name === channelName.replace('#', ''));
+        if (channel && !channel.is_member) {
+          await app.client.conversations.join({ channel: channel.id });
+          console.log(`[slack-gateway] Joined channel #${channel.name}`);
+        }
+      } catch (e) {
+        // Non-fatal: bot may not have channels:join scope or channel may be private
+        console.warn(`[slack-gateway] Could not join ${channelName}: ${e.message}`);
+      }
+    }
   } catch (error) {
     console.error('[slack-gateway] failed to start:', error.message);
     process.exit(1);
