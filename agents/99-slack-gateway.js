@@ -514,25 +514,56 @@ const AGENT_TOOLS = {
   '12-careerbot': CAREERBOT_TOOLS
 };
 
+const OVERRIDES_FILE = path.join(BRAIN_PATH, 'brain', 'dashboard', 'overrides.json');
+const EVICT_FILE = path.join(BRAIN_PATH, 'brain', 'dashboard', 'evict.json');
+// Track when each cached agent was created (ms timestamp)
+const agentCreatedAt = new Map();
+
+async function loadOverrides() {
+  try {
+    if (await fs.pathExists(OVERRIDES_FILE)) return await fs.readJson(OVERRIDES_FILE);
+  } catch { }
+  return {};
+}
+
 async function getOrCreateAgent(name) {
+  // Check if dashboard requested a cache eviction for this agent
+  try {
+    if (await fs.pathExists(EVICT_FILE)) {
+      const evict = await fs.readJson(EVICT_FILE);
+      const evictTs = evict[name] || 0;
+      const createdTs = agentCreatedAt.get(name) || 0;
+      if (evictTs > createdTs) {
+        agentRegistry.delete(name);
+        agentCreatedAt.delete(name);
+      }
+    }
+  } catch { }
+
   if (agentRegistry.has(name)) return agentRegistry.get(name);
 
   const cfg = AGENTS[name] || {};
+  // Merge dashboard overrides (model, temperature, maxHistoryTurns) over registry defaults
+  const overrides = await loadOverrides();
+  const ov = overrides[name] || {};
+  const effectiveCfg = { ...cfg, ...ov };
+
   const promptTxt = path.join('prompts', `${name}.txt`);
   const promptMd = path.join('prompts', `${name}.md`);
   const systemPromptPath = existsSync(promptTxt) ? promptTxt : promptMd;
   const tools = AGENT_TOOLS[name] || [];
   const agent = new Agent({
     name,
-    model: cfg.model || 'anthropic/claude-sonnet-4.6',
+    model: effectiveCfg.model || 'anthropic/claude-sonnet-4.6',
     systemPromptPath,
     tools,
-    namespace: cfg.namespace || name,
+    namespace: effectiveCfg.namespace || cfg.namespace || name,
     tokenBudget: tools.length > 0 ? 300000 : 8000,
-    useScreenContext: cfg.useScreenContext !== undefined ? cfg.useScreenContext : true,
-    maxHistoryTurns: cfg.maxHistoryTurns,
+    useScreenContext: effectiveCfg.useScreenContext !== undefined ? effectiveCfg.useScreenContext : true,
+    maxHistoryTurns: effectiveCfg.maxHistoryTurns,
   });
   agentRegistry.set(name, agent);
+  agentCreatedAt.set(name, Date.now());
   return agent;
 }
 

@@ -134,6 +134,15 @@ async function loadOverrides() {
 async function saveOverrides(data) {
   await fs.writeJson(OVERRIDES_FILE, data, { spaces: 2 });
 }
+// Write to evict.json so the gateway knows to clear a cached agent on next call
+const EVICT_FILE = path.join(OVERRIDES_DIR, 'evict.json');
+async function signalCacheEvict(agentName) {
+  try {
+    const existing = (await fs.pathExists(EVICT_FILE)) ? await fs.readJson(EVICT_FILE) : {};
+    existing[agentName] = Date.now();
+    await fs.writeJson(EVICT_FILE, existing, { spaces: 2 });
+  } catch { /* non-fatal */ }
+}
 
 // ── PWA Manifest ─────────────────────────────────────────────────────────────
 app.get('/manifest.json', (req, res) => {
@@ -347,7 +356,9 @@ app.post('/api/agent/:name/model', async (req, res) => {
   overrides[name] = overrides[name] || {};
   overrides[name].model = model;
   await saveOverrides(overrides);
-  res.json({ success: true, message: 'Model updated. Restart agent to apply.' });
+  // Signal gateway to evict this agent from its cache on next request
+  await signalCacheEvict(name);
+  res.json({ success: true, message: 'Model updated — takes effect on next message.' });
 });
 
 // Config update
@@ -359,10 +370,12 @@ app.post('/api/agent/:name/config', async (req, res) => {
   const overrides = await loadOverrides();
   overrides[name] = overrides[name] || {};
   if (temperature !== undefined) overrides[name].temperature = Math.max(0, Math.min(1, parseFloat(temperature)));
-  if (maxHistoryTurns !== undefined) overrides[name].maxHistoryTurns = Math.max(1, Math.min(50, parseInt(maxHistoryTurns)));
+  if (maxHistoryTurns !== undefined) overrides[name].maxHistoryTurns = Math.max(1, Math.min(20, parseInt(maxHistoryTurns)));
   if (contextQuery !== undefined) overrides[name].contextQuery = String(contextQuery).slice(0, 500);
   await saveOverrides(overrides);
-  res.json({ success: true, message: 'Config saved. Restart agent to apply.' });
+  // Signal gateway to evict this agent from its cache on next request
+  await signalCacheEvict(name);
+  res.json({ success: true, message: 'Config saved — takes effect on next message.' });
 });
 
 app.get('/api/agent/:name/config', async (req, res) => {
