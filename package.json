@@ -15,7 +15,13 @@
     "logs": "pm2 logs",
     "status": "pm2 status",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "backfill:ruvector": "node scripts/backfill-lancedb-to-ruvector.js",
+    "replay:ruvector": "node scripts/replay-ruvector-retry-queue.js",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:ci": "vitest run --coverage",
+    "coverage": "vitest run --coverage"
   },
   "keywords": [
     "ai",
@@ -44,9 +50,12 @@
     "pm2-prometheus-exporter": "^0.1.1",
     "uuid": "^11.0.0",
     "winston": "^3.19.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "ruvector": "^0.2.11"
   },
   "devDependencies": {
-    "eslint": "^10.0.1"
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^10.0.1",
+    "vitest": "^4.0.18"
   }
 }
