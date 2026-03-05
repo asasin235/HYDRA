@@ -15,7 +15,6 @@ const RUV_DUAL_WRITE     = process.env.RUVECTOR_DUAL_WRITE === '1';
 const RUV_SHADOW_READ    = process.env.RUVECTOR_SHADOW_READ === '1';
 const RUV_READ_PRIMARY   = process.env.RUVECTOR_READ_PRIMARY === '1';
 const RUV_METRICS_PATH   = process.env.RUVECTOR_METRICS_PATH || path.join(BRAIN_BASE, 'ruvector', 'metrics.jsonl');
-const RUV_TOPK_MULT      = parseInt(process.env.RUVECTOR_SHADOW_TOPK_MULTIPLIER || '3', 10);
 
 let db = null;
 let memoriesTable = null;

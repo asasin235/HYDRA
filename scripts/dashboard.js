@@ -1901,7 +1901,7 @@ app.get('/api/ruvector/stats', async (req, res) => {
     const storagePath = path.join(BRAIN_PATH, 'ruvector', 'ruvector.db');
 
     const stats = {
-      enabled: !!process.env.RUVECTOR_ENABLE,
+      enabled: process.env.RUVECTOR_ENABLE === '1',
       dualWrite: process.env.RUVECTOR_DUAL_WRITE === '1',
       shadowRead: process.env.RUVECTOR_SHADOW_READ === '1',
       readPrimary: process.env.RUVECTOR_READ_PRIMARY === '1',
@@ -1916,12 +1916,13 @@ app.get('/api/ruvector/stats', async (req, res) => {
       retryQueueSize: 0
     };
 
-    // Parse metrics
+    // Parse metrics — cap to last 10 000 lines to avoid blocking the event loop
     if (stats.metricsExists) {
       const raw = await fs.readFile(metricsPath, 'utf-8');
-      const lines = raw.split('\n').filter(l => l.trim());
-      stats.totalQueries = lines.length;
-      let totalLance = 0, totalRuv = 0, totalOverlap = 0, errors = 0;
+      const allLines = raw.split('\n').filter(l => l.trim());
+      stats.totalQueries = allLines.length;
+      const lines = allLines.slice(-10000);
+      let totalLance = 0, totalRuv = 0, totalOverlap = 0, errors = 0, parsedCount = 0;
       for (const line of lines) {
         try {
           const m = JSON.parse(line);
@@ -1929,12 +1930,13 @@ app.get('/api/ruvector/stats', async (req, res) => {
           totalRuv += m.ruv_ms || 0;
           totalOverlap += m.overlap_ratio || 0;
           if (m.error) errors++;
+          parsedCount++;
         } catch { /* skip bad lines */ }
       }
-      if (lines.length > 0) {
-        stats.avgLanceMs = Math.round((totalLance / lines.length) * 100) / 100;
-        stats.avgRuvMs = Math.round((totalRuv / lines.length) * 100) / 100;
-        stats.avgOverlap = Math.round((totalOverlap / lines.length) * 100) / 100;
+      if (parsedCount > 0) {
+        stats.avgLanceMs = Math.round((totalLance / parsedCount) * 100) / 100;
+        stats.avgRuvMs = Math.round((totalRuv / parsedCount) * 100) / 100;
+        stats.avgOverlap = Math.round((totalOverlap / parsedCount) * 100) / 100;
       }
       stats.errorCount = errors;
     }
@@ -1955,7 +1957,8 @@ app.get('/api/ruvector/metrics', async (req, res) => {
     if (!await fs.pathExists(metricsPath)) return res.json([]);
     const raw = await fs.readFile(metricsPath, 'utf-8');
     const lines = raw.split('\n').filter(l => l.trim());
-    const last = parseInt(req.query.last) || 50;
+    const lastRaw = parseInt(req.query.last, 10);
+    const last = Number.isFinite(lastRaw) && lastRaw > 0 ? Math.min(lastRaw, 1000) : 50;
     const entries = lines.slice(-last).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     res.json(entries);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1966,7 +1969,10 @@ app.get('/api/ruvector/retry-queue', async (req, res) => {
     const retryPath = path.join(BRAIN_PATH, 'ruvector', 'retry-queue.jsonl');
     if (!await fs.pathExists(retryPath)) return res.json([]);
     const raw = await fs.readFile(retryPath, 'utf-8');
-    const entries = raw.split('\n').filter(l => l.trim()).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    const lines = raw.split('\n').filter(l => l.trim());
+    const lastRaw = parseInt(req.query.last, 10);
+    const last = Number.isFinite(lastRaw) && lastRaw > 0 ? Math.min(lastRaw, 1000) : 50;
+    const entries = lines.slice(-last).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     res.json(entries);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
