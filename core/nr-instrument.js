@@ -10,7 +10,11 @@ let newrelic = null;
 
 try {
   const mod = await import('newrelic');
-  newrelic = mod.default || mod;
+  const candidate = mod.default || mod;
+  // Only use newrelic if the agent is actually active with the full API
+  if (typeof candidate?.startBackgroundTransaction === 'function') {
+    newrelic = candidate;
+  }
 } catch {
   // New Relic not loaded — all methods below become no-ops
 }
