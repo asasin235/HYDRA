@@ -72,6 +72,7 @@ const SVG = {
   sun:       '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
   moon:      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
   download:  '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+  upload:    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
   link:      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   file:      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
   database:  '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
@@ -437,13 +438,44 @@ app.get('/api/memory/search', async (req, res) => {
       return res.json({ error: 'LanceDB not available', results: [] });
     }
     if (!searchMemory) return res.json({ error: 'Search function not found', results: [] });
-    const results = await searchMemory(query, 20);
+    const results = await searchMemory(ns || null, query, 20);
     const filtered = ns ? results.filter(r => (r.namespace || r.agent || '').includes(ns)) : results;
     res.json(filtered.slice(0, 20));
   } catch (e) { res.json({ error: e.message, results: [] }); }
 });
 
-// Integration status
+// Memory ingestion
+app.post('/api/memory/ingest', async (req, res) => {
+  try {
+    const { text, namespace, source } = req.body;
+    if (!text || !namespace) return res.status(400).json({ error: 'text and namespace required' });
+    let mem;
+    try { mem = await import('../core/memory.js'); } catch { return res.status(503).json({ error: 'LanceDB not available' }); }
+    // Chunk text into ~400 char segments, respecting newlines
+    const chunks = [];
+    const lines = text.split('\n');
+    let current = '';
+    for (const line of lines) {
+      if ((current + '\n' + line).length > 400 && current) {
+        chunks.push(current.trim());
+        current = line;
+      } else {
+        current = current ? current + '\n' + line : line;
+      }
+    }
+    if (current.trim()) chunks.push(current.trim());
+    const nonEmpty = chunks.filter(c => c.length > 20);
+    let stored = 0;
+    for (const chunk of nonEmpty) {
+      const content = source ? `[${source}] ${chunk}` : chunk;
+      await mem.addMemory(namespace, content);
+      stored++;
+    }
+    res.json({ success: true, chunks: stored, total: nonEmpty.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
 app.get('/api/integrations', async (req, res) => {
   const status = {};
   // Redis
@@ -1040,14 +1072,14 @@ async function loadAll() {
   if (pct < 30) quoteEl.textContent = '"I can do this all day." -- Steve Rogers';
   else if (pct < 55) quoteEl.textContent = '"Perfectly balanced, as all things should be." -- Thanos';
   else if (pct < 80) quoteEl.textContent = '"The hardest choices require the strongest wills." -- Thanos';
-  else if (pct < 95) quoteEl.textContent = '"We\'re in the endgame now." -- Doctor Strange';
+  else if (pct < 95) quoteEl.textContent = '"We\\'re in the endgame now." -- Doctor Strange';
   else quoteEl.textContent = '"I am inevitable." -- Thanos';
 
   // Budget alert banner
   const alertEl = document.getElementById('budget-alert');
   if (pct >= 90) {
     alertEl.className = 'budget-alert endgame';
-    alertEl.innerHTML = '${SVG.alert} <span>"We\'re in the endgame now." Budget at ' + pct.toFixed(0) + '% -- immediate attention required.</span>';
+    alertEl.innerHTML = '${SVG.alert} <span>"We\\'re in the endgame now." Budget at ' + pct.toFixed(0) + '% -- immediate attention required.</span>';
   } else if (pct >= 80) {
     alertEl.className = 'budget-alert critical';
     alertEl.innerHTML = '${SVG.alert} <span>Budget critical at ' + pct.toFixed(0) + '% -- Tier 2 agents will be paused.</span>';
@@ -1605,7 +1637,7 @@ app.get('/memory', (req, res) => {
   const sidebar = buildSidebar('memory');
   const nsOptions = Object.entries(AGENTS)
     .filter(([n]) => n !== '99-slack-gateway')
-    .map(([n, c]) => '<option value="' + (c.namespace || '') + '">' + n + '</option>')
+    .map(([n, c]) => '<option value="' + (c.namespace || '') + '">' + n + ' (' + (c.namespace || '') + ')</option>')
     .join('');
 
   const html = `${pageHead('Memory Browser')}
@@ -1614,23 +1646,66 @@ app.get('/memory', (req, res) => {
   <main class="main">
     <div class="page-header">
       <div>
-        <div class="page-title">${SVG.database} Memory Browser</div>
-        <div class="page-subtitle">Search the neural memory banks -- "I remember all of them"</div>
+        <div class="page-title">${SVG.database} Memory</div>
+        <div class="page-subtitle">Search and feed the neural memory banks -- "I remember all of them"</div>
       </div>
     </div>
 
-    <div class="search-bar">
-      <input type="text" id="mem-query" placeholder="Search memories..." onkeydown="if(event.key==='Enter')searchMemory()">
-      <select id="mem-ns">
-        <option value="">All Namespaces</option>
-        ${nsOptions}
-      </select>
-      <button class="btn" onclick="searchMemory()">${SVG.search} Search</button>
+    <div style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0">
+      <button id="tab-search" onclick="switchTab('search')" style="padding:10px 20px;border:none;background:none;color:var(--accent);border-bottom:2px solid var(--accent);cursor:pointer;font-size:13px;font-family:inherit;font-weight:500;margin-bottom:-1px">${SVG.search} Search</button>
+      <button id="tab-ingest" onclick="switchTab('ingest')" style="padding:10px 20px;border:none;background:none;color:var(--text-muted);border-bottom:2px solid transparent;cursor:pointer;font-size:13px;font-family:inherit;font-weight:500;margin-bottom:-1px">${SVG.upload} Feed Memory</button>
     </div>
 
-    <div id="mem-results">
-      <div style="color:var(--text-muted);padding:24px;text-align:center;font-size:13px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)">
-        Enter a search query to explore HYDRA's memory banks
+    <div id="pane-search">
+      <div class="search-bar">
+        <input type="text" id="mem-query" placeholder="Search memories..." onkeydown="if(event.key==='Enter')doSearch()">
+        <select id="mem-ns">
+          <option value="">All Agents</option>
+          ${nsOptions}
+        </select>
+        <button class="btn" onclick="doSearch()">${SVG.search} Search</button>
+      </div>
+      <div id="mem-results">
+        <div style="color:var(--text-muted);padding:24px;text-align:center;font-size:13px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)">
+          Enter a search query to explore HYDRA's memory banks
+        </div>
+      </div>
+    </div>
+
+    <div id="pane-ingest" style="display:none">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:16px">
+        <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:16px">${SVG.upload} Feed Data to Memory</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div>
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Agent Namespace</label>
+            <select id="ing-ns" style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);font-size:13px;font-family:inherit">
+              ${nsOptions}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Source Label (optional)</label>
+            <input type="text" id="ing-source" placeholder="e.g. WhatsApp Saima, Meeting notes..." style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);font-size:13px;font-family:inherit;box-sizing:border-box">
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Upload File (.txt or .zip WhatsApp export)</label>
+          <input type="file" id="ing-file" accept=".txt,.zip,.md,.csv" onchange="onFileSelect(this)" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);font-size:13px;font-family:inherit;box-sizing:border-box;cursor:pointer">
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Or Paste Text Directly</label>
+          <textarea id="ing-text" rows="8" placeholder="Paste WhatsApp chat export, meeting notes, any text you want HYDRA to remember..." style="width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5"></textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <button class="btn" onclick="ingestMemory()" id="ing-btn">${SVG.upload} Ingest into Memory</button>
+          <div id="ing-status" style="font-size:12px;color:var(--text-muted)"></div>
+        </div>
+      </div>
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+        <div style="font-size:11px;color:var(--text-muted);line-height:1.8">
+          <strong style="color:var(--text-secondary)">How it works:</strong> Text is chunked into ~400 character segments, embedded via OpenRouter text-embedding-3-small, and stored in LanceDB under the selected agent namespace.
+          Agents with useScreenContext:true (like 03-sahibabot, 05-jarvis) will find these memories during their next run via context injection.
+          <br><strong style="color:var(--text-secondary)">WhatsApp ZIP:</strong> Export a chat (Chat &gt; More &gt; Export Chat &gt; Without Media), then upload the .zip or extracted .txt file.
+        </div>
       </div>
     </div>
 
@@ -1638,10 +1713,75 @@ app.get('/memory', (req, res) => {
   </main>
 </div>
 <div class="toast" id="toast"></div>
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"><\/script>
 ${commonScripts()}
 <script>
-async function searchMemory() {
+function switchTab(tab) {
+  document.getElementById('pane-search').style.display = tab === 'search' ? '' : 'none';
+  document.getElementById('pane-ingest').style.display = tab === 'ingest' ? '' : 'none';
+  document.getElementById('tab-search').style.color = tab === 'search' ? 'var(--accent)' : 'var(--text-muted)';
+  document.getElementById('tab-search').style.borderBottomColor = tab === 'search' ? 'var(--accent)' : 'transparent';
+  document.getElementById('tab-ingest').style.color = tab === 'ingest' ? 'var(--accent)' : 'var(--text-muted)';
+  document.getElementById('tab-ingest').style.borderBottomColor = tab === 'ingest' ? 'var(--accent)' : 'transparent';
+}
+
+async function onFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById('ing-status');
+  status.textContent = 'Reading file...';
+  try {
+    if (file.name.endsWith('.zip')) {
+      if (typeof JSZip === 'undefined') { status.textContent = 'JSZip not loaded yet, try again in a moment'; return; }
+      const buf = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
+      let combined = '';
+      const fileNames = Object.keys(zip.files);
+      for (const name of fileNames) {
+        const entry = zip.files[name];
+        if (!entry.dir && (name.endsWith('.txt') || name.endsWith('.md'))) {
+          combined += await entry.async('string') + '\\n\\n';
+        }
+      }
+      document.getElementById('ing-text').value = combined;
+      status.textContent = 'ZIP extracted: ' + combined.length + ' chars from ' + fileNames.length + ' files';
+    } else {
+      const text = await file.text();
+      document.getElementById('ing-text').value = text;
+      status.textContent = 'File loaded: ' + text.length + ' chars';
+    }
+  } catch (e) { status.textContent = 'Error: ' + e.message; }
+}
+
+async function ingestMemory() {
+  const text = document.getElementById('ing-text').value.trim();
+  const namespace = document.getElementById('ing-ns').value;
+  const source = document.getElementById('ing-source').value.trim();
+  if (!text) { showToast('Paste some text first', 'error'); return; }
+  if (!namespace) { showToast('Select an agent namespace', 'error'); return; }
+  const btn = document.getElementById('ing-btn');
+  const status = document.getElementById('ing-status');
+  btn.disabled = true;
+  status.textContent = 'Ingesting...';
+  try {
+    const r = await fetch('/api/memory/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, namespace, source })
+    });
+    const d = await r.json();
+    if (d.error) { showToast(d.error, 'error'); status.textContent = 'Error: ' + d.error; }
+    else {
+      showToast('Stored ' + d.chunks + ' memory chunks!', 'success');
+      status.textContent = '\u2713 ' + d.chunks + ' chunks stored in ' + namespace;
+      document.getElementById('ing-text').value = '';
+      document.getElementById('ing-file').value = '';
+    }
+  } catch (e) { showToast(e.message, 'error'); }
+  btn.disabled = false;
+}
+
+async function doSearch() {
   const query = document.getElementById('mem-query').value.trim();
   const ns = document.getElementById('mem-ns').value;
   if (!query) return;
@@ -1654,7 +1794,7 @@ async function searchMemory() {
     const data = await r.json();
     const results = Array.isArray(data) ? data : data.results || [];
     if (!results.length) {
-      container.innerHTML = '<div style="color:var(--text-muted);padding:24px;text-align:center;font-size:13px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)">No memories found. ' + (data.error ? data.error : '"The universe is finite, its resources finite."') + '</div>';
+      container.innerHTML = '<div style="color:var(--text-muted);padding:24px;text-align:center;font-size:13px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)">No memories found. ' + (data.error ? data.error : '\u201cThe universe is finite, its resources finite.\u201d') + '</div>';
       return;
     }
     container.innerHTML = results.map(m => {
@@ -1662,10 +1802,10 @@ async function searchMemory() {
       return '<div class="memory-card">' +
         '<div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">' + (m.namespace || m.agent || m.table || '') + (m.date ? ' | ' + m.date : '') + '</div>' +
         '<div style="font-size:13px;color:var(--text-secondary);line-height:1.6">' + text.slice(0, 500) + '</div>' +
-        (m._distance !== undefined ? '<div style="font-size:10px;color:var(--text-muted);margin-top:6px">Relevance: ' + (1 - m._distance).toFixed(3) + '</div>' : '') +
+        (m.score !== undefined ? '<div style="font-size:10px;color:var(--text-muted);margin-top:6px">Distance: ' + (m.score || 0).toFixed(3) + '</div>' : '') +
       '</div>';
     }).join('');
-  } catch (e) { showToast("I don't feel so good...", 'error'); }
+  } catch (e) { showToast("I don\\'t feel so good...", 'error'); }
 }
 <\/script>
 </body></html>`;
