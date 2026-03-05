@@ -16,7 +16,7 @@ dotenv.config({ path: path.join(ROOT_DIR, ".env") });
 // Import HYDRA core modules
 import { db, addTrade, getTrades, getDebt } from "../core/db.js";
 import { writeContext } from "../core/openclaw-memory.js";
-import { searchAllContext } from "../core/memory.js";
+import { searchAllContext, searchPdfContent } from "../core/memory.js";
 import { getMonthlySpend, isOpen, isPaused } from "../core/bottleneck.js";
 import { ACTIVE_AGENT_NAMES } from "../core/registry.js";
 import { getMessages } from "../core/hermes-bridge.js";
@@ -147,6 +147,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             limit: { type: "number", description: "Number of recent messages to retrieve (max 50, default 10)" }
           },
           required: ["channel", "contact"]
+        }
+      },
+      {
+        name: "hydra_search_pdfs",
+        description: "Semantic search across ingested PDF documents in the brain. PDFs dropped into pdf_inbox/ are automatically indexed.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Natural language query to search across PDF content" },
+            filename: { type: "string", description: "Optional: restrict search to a specific PDF file" },
+            limit: { type: "number", description: "Maximum number of results to retrieve (default 5)" }
+          },
+          required: ["query"]
         }
       }
     ]
@@ -296,6 +309,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (limit > 50) limit = 50;
       const messages = await getMessages(channel, contact, limit);
       return { content: [{ type: "text", text: JSON.stringify(messages, null, 2) }] };
+    }
+
+    else if (name === "hydra_search_pdfs") {
+      const { query, filename, limit = 5 } = args;
+      const results = await searchPdfContent(query, { limit, filename });
+      if (results.length === 0) {
+        return { content: [{ type: "text", text: "No matching PDF content found. Make sure PDFs have been ingested via pdf_inbox/." }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
 
     else {

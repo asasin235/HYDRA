@@ -25,6 +25,7 @@ module.exports = {
     script('sms-reader', './scripts/sms-reader.js'),
     script('screenpipe-sync', './scripts/screenpipe-sync.js'),
     script('ingest-context', './scripts/ingest-context.js'),
+    script('ingest-pdf', './scripts/ingest-pdf.js'),
     script('dashboard', './scripts/dashboard.js'),
     {
       name: 'backup',
