@@ -43,7 +43,8 @@
     "pm2": "^5.4.0",
     "pm2-prometheus-exporter": "^0.1.1",
     "uuid": "^11.0.0",
-    "winston": "^3.19.0"
+    "winston": "^3.19.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "eslint": "^10.0.1"
