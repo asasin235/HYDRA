@@ -4,38 +4,28 @@
 
 ---
 
-## 🔴 Critical / High Priority
+## ✅ Completed
 
-### 1. Multi-Round Tool Call Loop
-
-**Problem:** `core/agent.js` only handles **one round** of tool calls. If the follow-up LLM response also contains tool calls (multi-step reasoning), they are silently ignored. This directly breaks `edmobot` (Jira → GitHub pipeline) and `wolf` (multi-step market analysis).
-
-**Fix:**
-```js
-// core/agent.js
-const MAX_TOOL_ITERATIONS = 10;
-let iterations = 0;
-
-while (
-  assistantMessage.tool_calls?.length &&
-  this.tools?.length &&
-  iterations < MAX_TOOL_ITERATIONS
-) {
-  // process tools, push results to transcript
-  // re-call model with updated transcript
-  iterations++;
-}
-```
-
-**Files to change:** `core/agent.js`
+| # | Improvement | Completed |
+|---|-------------|-----------|
+| 1 | Multi-round tool call loop (max 10 iterations) | `core/agent.js` |
+| 3 | Persistent conversation history (SQLite `conversation_history`) | `core/agent.js`, `core/db.js` |
+| 4 | Per-agent temperature config in registry | `core/registry.js` |
+| 5 | Dedicated health server (port collision fix) | `core/health-server.js` |
+| 7 | Agent-to-agent pub/sub via Redis | `core/bus.js` |
+| 13 | Web dashboard with agent status, spend, logs | `scripts/dashboard.js` |
+| 15 | CareerBot Phase 2 (12-careerbot.js) | `agents/12-careerbot.js` |
+| — | RuVector integration (dual-write, shadow-read, primary-read modes) | `core/ruvectorStore.js` |
 
 ---
 
+## 🔴 Critical / High Priority
+
 ### 2. Context Window Blindness
 
-**Problem:** `estimateTokensFromMessages()` uses a naive `chars / 4` heuristic with no guard against exceeding the model's context window. LanceDB context snippets can silently overflow cheaper models (e.g. Mistral Small has a 32K context).
+**Problem:** `estimateTokensFromMessages()` uses a naive `chars / 4` heuristic with no guard against exceeding the model's context window. RuVector/LanceDB context snippets can silently overflow cheaper models (e.g. Mistral Small has a 32K context).
 
-**Fix:** Add per-model `MAX_CONTEXT_TOKENS` in `core/registry.js` and truncate `contextSnippets` before building the messages array.
+**Fix:** Add per-model `maxContextTokens` in `core/registry.js` and truncate `contextSnippets` before building the messages array.
 
 ```js
 // core/registry.js — add to each agent entry
@@ -46,74 +36,110 @@ maxContextTokens: 32000, // model-specific limit
 
 ---
 
-### 3. No Persistent Conversation History
+### 16. RuVector Full Migration — Decommission LanceDB
 
-**Problem:** Every `agent.run()` starts fresh — there is no multi-turn memory within a session. If you ask `@hydra cfobot how much did I spend today?` and follow up with `break it down by category`, CFOBot has no idea what "it" refers to.
+**Problem:** HYDRA now runs a dual-write strategy (LanceDB + RuVector), but LanceDB remains the primary read path. The backfill script (`scripts/backfill-lancedb-to-ruvector.js`) exists but migration has not been completed. Every vector write incurs double cost and latency.
 
-**Fix:** Add a lightweight in-memory conversation buffer per agent (last N turns), and optionally persist it to SQLite for cross-session continuity.
+**Fix:**
+1. Run the backfill script once to migrate all historical LanceDB data to RuVector.
+2. Flip `RUVECTOR_MODE=primary` in `.env` to make RuVector the sole read path.
+3. Archive LanceDB files and remove `core/memory.js` dual-write paths.
+4. Update `core/memory.js` to delegate all reads/writes to `core/ruvectorStore.js`.
+
+**Files to change:** `core/memory.js`, `core/ruvectorStore.js`, `.env`
+
+---
+
+### 17. No Structured Agent Performance Metrics
+
+**Problem:** There is no way to know which agents are actually useful. Token spend is tracked but there is no signal on whether an agent's output led to a positive outcome (code merged, trade profitable, reminder acted on).
+
+**Fix:** Add an `outcomes` SQLite table. Every agent run gets an outcome row. Slack reactions (✅ 👍 ❌) on agent responses are used as implicit feedback signals, written back to the DB by the gateway.
 
 ```js
-// core/agent.js
-this._conversationHistory = []; // max last 10 turns
+// core/db.js — new table
+CREATE TABLE outcomes (
+  id TEXT PRIMARY KEY,
+  agent TEXT,
+  run_id TEXT,
+  slack_ts TEXT,
+  reaction TEXT,     -- 'thumbsup' | 'thumbsdown' | 'white_check_mark'
+  recorded_at TEXT
+);
 ```
 
-**Files to change:** `core/agent.js`, `core/db.js`
+**Files to change:** `core/db.js`, `agents/99-slack-gateway.js`, `scripts/dashboard.js`
 
 ---
 
 ## 🟡 Architecture Improvements
 
-### 4. Hardcoded `temperature: 0.4` for All Agents
-
-**Problem:** Every agent uses `temperature: 0.4` regardless of task type. Creative agents like `brandbot` or `sahibabot` (drafting messages) benefit from higher temperatures (~0.7–0.8), while deterministic agents like `cfobot` (financial math) or `edmobot` (code changes) should use 0.1–0.2.
-
-**Fix:** Add a `temperature` field to each agent config in `core/registry.js`.
-
-```js
-// core/registry.js
-'01-edmobot': { ..., temperature: 0.1 },
-'02-brandbot': { ..., temperature: 0.75 },
-'06-cfobot':  { ..., temperature: 0.1 },
-'03-sahibabot': { ..., temperature: 0.7 },
-```
-
-**Files to change:** `core/registry.js`, `core/agent.js`
-
----
-
-### 5. Single Health Port = Race Condition in PM2
-
-**Problem:** All agents share port `3002` via a module-level `_healthServer` singleton in `core/agent.js`. Since PM2 spawns each agent as a **separate process**, the singleton doesn't work across processes. Only the first process to start actually serves the health endpoint.
-
-**Fix:** Move the health server to a **dedicated `health-server.js` PM2 service** that all agents report into via a shared SQLite table.
-
-**Files to change:** `core/agent.js`, new `core/health-server.js`, `ecosystem.config.cjs`
-
----
-
 ### 6. Dual Memory System Duplication
 
-**Problem:** Two parallel memory systems exist — LanceDB (`core/memory.js`) and OpenClaw-backed markdown files (`core/openclaw-memory.js`). This creates redundant writes, inconsistent search results, and double storage cost. The README even labels LanceDB as "legacy."
+**Problem:** Two parallel memory systems exist — `core/memory.js` (LanceDB) and `core/openclaw-memory.js` (Markdown files). With RuVector now integrated, there are effectively **three** overlapping systems. This creates redundant writes, inconsistent search results, and storage drift.
 
-**Fix:** Deprecate `openclaw-memory.js`. Make LanceDB the canonical brain. `ingest-context.js` should be the only writer.
+**Fix:** Deprecate `core/openclaw-memory.js`. Make RuVector (via `core/ruvectorStore.js`) the single canonical vector brain. `ingest-context.js` should be the only writer; `core/memory.js` becomes a thin wrapper over RuVector.
 
-**Files to change:** `core/openclaw-memory.js` (deprecate), `core/memory.js`
+**Files to change:** `core/openclaw-memory.js` (deprecate), `core/memory.js`, `core/ruvectorStore.js`
 
 ---
 
-### 7. No Agent-to-Agent Communication
+### 18. Architect Agent Has No Actual Orchestration Power
 
-**Problem:** Agents are isolated islands that only communicate via Slack roundtrips. There's no way for `07-biobot` to tell `00-architect` "user is low HRV, reduce cognitive load today" in real-time.
+**Problem:** `00-architect` runs on a cron schedule and posts strategic briefs to Slack, but it cannot actually trigger other agents or create tasks. It's a read-only observer, not an orchestrator.
 
-**Fix:** Implement a lightweight internal pub/sub using SQLite `agent_state` table or Node.js `EventEmitter` with IPC.
+**Fix:** Give Architect a `trigger_agent` tool that publishes to `core/bus.js` on the `hydra:agent.run` channel. This lets it spin up `09-wolf` for a market scan, or push a task to `01-edmobot`, based on strategic assessment.
 
 ```js
-// new core/bus.js
-export function publish(channel, payload) { /* write to agent_state */ }
-export function subscribe(channel, callback) { /* poll or IPC listen */ }
+// tool in agents/00-architect.js
+{
+  name: 'trigger_agent',
+  description: 'Trigger another HYDRA agent to run a task',
+  parameters: {
+    type: 'object',
+    properties: {
+      agent: { type: 'string', description: 'Agent name, e.g. 09-wolf' },
+      task: { type: 'string', description: 'Natural language task description' }
+    },
+    required: ['agent', 'task']
+  },
+  execute: async ({ agent, task }) => {
+    await publish('hydra:agent.run', { agent, task, triggeredBy: '00-architect' });
+    return `Triggered ${agent} with task: ${task}`;
+  }
+}
 ```
 
-**Files to change:** `core/db.js`, `core/agent.js`, new `core/bus.js`
+**Files to change:** `agents/00-architect.js`, `core/bus.js`
+
+---
+
+### 19. No Graceful Shutdown / Drain on PM2 Reload
+
+**Problem:** PM2 `reload` sends `SIGINT` to agents mid-LLM-call. In-progress tool calls are lost silently. There is no drain logic to finish the current run before shutting down.
+
+**Fix:** Add a `process.on('SIGINT')` handler in `core/agent.js` that sets a `_shuttingDown` flag, waits for any active run to complete (max 30s), then exits cleanly.
+
+```js
+// core/agent.js
+process.on('SIGINT', async () => {
+  this._shuttingDown = true;
+  await this._activeRunPromise; // wait up to 30s
+  process.exit(0);
+});
+```
+
+**Files to change:** `core/agent.js`
+
+---
+
+### 20. Bus Events Have No Dead-Letter Queue
+
+**Problem:** Redis pub/sub events on `hydra:agent.run` / `hydra:market.signal` etc. are fire-and-forget. If the subscriber process is down when an event fires, the message is permanently lost with no retry.
+
+**Fix:** Add a lightweight dead-letter queue using a Redis `LPUSH` list per channel. Failed consumers push to `hydra:dlq:<channel>`. A recovery cron in `08-watchtower.js` drains and retries them on startup.
+
+**Files to change:** `core/bus.js`, `agents/08-watchtower.js`
 
 ---
 
@@ -121,13 +147,14 @@ export function subscribe(channel, callback) { /* poll or IPC listen */ }
 
 ### 8. Tests Are Placeholder Stubs
 
-**Problem:** The `tests/` directory exists but all Sprint 2 tests are unimplemented. For a system that autonomously makes PRs, sends WhatsApp messages, and controls home appliances, this is a real risk.
+**Problem:** The `tests/` directory exists but most tests are unimplemented. For a system that autonomously makes PRs, sends WhatsApp messages, and controls home appliances, this is a real risk.
 
 **Priority test targets:**
 - `core/bottleneck.js` — budget enforcement logic
-- `core/agent.js` — tool call loop, retry logic
-- `core/github.js` — PR creation (mock the API)
+- `core/agent.js` — tool call loop, retry logic, conversation history
+- `core/ruvectorStore.js` — vector store CRUD, shadow-read comparison
 - `core/db.js` — SQLite CRUD operations
+- `agents/99-slack-gateway.js` — routing logic (unit test with mock Slack events)
 
 ---
 
@@ -157,6 +184,21 @@ prompts/
 
 ---
 
+### 21. Dashboard Has No Auth
+
+**Problem:** `scripts/dashboard.js` is exposed on the local network without authentication. Anyone on the same Wi-Fi can view agent status, token spend, and restart agents via `POST /api/restart/:name`.
+
+**Fix:** Add a simple `DASHBOARD_PASSWORD` env var with HTTP Basic Auth middleware on all routes. One-liner with the `express-basic-auth` package.
+
+```js
+import basicAuth from 'express-basic-auth';
+app.use(basicAuth({ users: { admin: process.env.DASHBOARD_PASSWORD }, challenge: true }));
+```
+
+**Files to change:** `scripts/dashboard.js`
+
+---
+
 ## 💡 Feature Backlog
 
 ### 11. Wolf — No Live Market Data
@@ -169,25 +211,13 @@ prompts/
 
 ---
 
-### 12. CFOBot Has No Real Spending Data Source
+### 12. CFOBot — UPI / Payment App Integration
 
-**Problem:** SMS Automation is a backlog item. Until then, `06-cfobot` has no real spending data source.
+**Problem:** `sms-reader.js` captures Indian bank SMS but misses UPI transactions from PhonePe/GPay which often arrive as push notifications instead of SMS. Significant spending is invisible to CFOBot.
 
-**Interim Fix:** Build an iOS Shortcut that forwards bank SMS messages to a webhook endpoint on your Mac Mini, which writes them to the `debt_tracker` SQLite table. This is a weekend project.
+**Fix:** Build an Android Tasker profile (or iOS Shortcuts action) that captures UPI notification text and forwards it to the same Mac Mini SMS webhook used by `sms-reader.js`. Alternatively, integrate the HDFC/ICICI bank statement CSV export via a weekly email parser.
 
----
-
-### 13. No Dashboard / Web UI
-
-**Problem:** HYDRA can only be interrogated via Slack or the raw `/health` endpoint. No visual overview of agent status, daily spend, logs, or heartbeats.
-
-**Fix:** Minimal read-only dashboard using **Hono.js + htmx** as a single `dashboard.js` PM2 process — no build step required.
-
-**Suggested views:**
-- Agent status grid (healthy / paused / circuit-open)
-- Real-time token spend vs budget
-- Recent agent logs feed
-- Heartbeat timeline per agent
+**Files to change:** `scripts/sms-reader.js`, `agents/06-cfobot.js`
 
 ---
 
@@ -201,18 +231,72 @@ prompts/
 
 ---
 
-### 15. CareerBot — Phase 2
+### 22. HYDRA Local CLI (`hydra` command)
 
-**Status:** Reserved slot `08-careerbot`.
+**Problem:** The only way to interact with HYDRA is via Slack. When Slack is unavailable, offline, or inconvenient (e.g. terminal workflow), there's no way to query agents or check system status locally.
 
-**Suggested model:** Claude Sonnet 4.6 (requires deep reasoning)
+**Fix:** Build a small Node.js CLI (`scripts/hydra-cli.js`) installed globally via `npm link`. Subcommands:
 
-**Suggested tools:**
-- LinkedIn profile analysis
-- GitHub contribution graph analysis
-- Resume diff tracker (compare current skills vs target JD)
-- Skill gap scoring with learning resource suggestions
-- Salary benchmarking via public data sources
+```sh
+hydra ask jarvis "what's on my calendar today?"
+hydra status              # agent health table
+hydra logs 06-cfobot      # tail PM2 logs for an agent
+hydra budget              # show spend vs cap
+hydra restart 01-edmobot  # PM2 restart wrapper
+```
+
+**Files to change:** new `scripts/hydra-cli.js`, `package.json` (add `bin` entry)
+
+---
+
+### 23. Wolf — Paper Trade P&L Analytics
+
+**Problem:** `09-wolf` records paper trades to SQLite but there's no aggregated view of win rate, average return, max drawdown, or trade duration. It's impossible to evaluate Wolf's strategy quality over time.
+
+**Fix:** Add a `wolf_analytics` view to `core/db.js` and a `/wolf` route on the dashboard showing: total trades, win%, avg P&L per trade, best/worst trade, rolling 7-day equity curve (Chart.js).
+
+**Files to change:** `core/db.js`, `scripts/dashboard.js`
+
+---
+
+### 24. Screenpipe — Deep Work Session Detection
+
+**Problem:** Screenpipe ingests raw OCR text into LanceDB but there's no higher-level analysis of work patterns. HYDRA has all the data to answer "how many hours of deep work did I do this week?" but nothing queries it.
+
+**Fix:** Add a weekly cron to `07-biobot` (or a new `screenpipe-analytics.js` script) that scans the `screen_activity` LanceDB table, clusters app/context switches, and produces a weekly "focus report" posted to `#07-biobot`.
+
+**Metrics to surface:**
+- Deep work hours (>25 min uninterrupted in IDE/docs)
+- Context switch frequency per day
+- Top 5 apps by active screen time
+- Distraction index (social/news apps during work hours)
+
+**Files to change:** `agents/07-biobot.js` or new `scripts/screenpipe-analytics.js`
+
+---
+
+### 25. Auditor — A/B Prompt Testing
+
+**Problem:** `11-auditor` rewrites prompts based on its own judgment, but there's no mechanism to compare two prompt variants objectively. A bad prompt rewrite could silently degrade agent quality for weeks.
+
+**Fix:** When auditor proposes a change, it stores both the `current` and `proposed` prompt variants in a new `prompt_experiments` SQLite table. For the next 7 days, 50% of agent runs use the new prompt (selected by run timestamp parity). Outcome reactions (via the #17 outcomes system) determine which wins.
+
+**Files to change:** `agents/11-auditor.js`, `core/db.js`, `core/agent.js`
+
+---
+
+### 26. BioBot — Wearable Data Integration
+
+**Problem:** `07-biobot` currently relies on manual HRV input or Plaud audio mentions of health. There's no automated data stream from wearables.
+
+**Fix:** Integrate Apple Health export (via iOS Shortcut → webhook) or Garmin Connect API to pull daily HRV, sleep score, resting HR, and step count. Feed these as structured facts into each morning biobot run instead of relying on self-reported audio.
+
+**Supported sources:**
+- Apple Health via iOS Shortcut (daily export to webhook)
+- Garmin Connect API (OAuth2, free tier)
+- Whoop API (if applicable)
+
+**Files to change:** `agents/07-biobot.js`, new `core/health-data.js`
 
 ---
 
@@ -220,22 +304,26 @@ prompts/
 
 | # | Improvement | Impact | Effort | Priority |
 |---|-------------|--------|--------|----------|
-| 1 | Multi-round tool loop | High | Low | 🔴 Critical |
 | 2 | Context window guards | High | Low | 🔴 Critical |
-| 3 | Conversation history | High | Medium | 🔴 Critical |
-| 4 | Per-agent temperature | Medium | Low | 🟡 High |
-| 5 | Health port fix | Medium | Medium | 🟡 High |
-| 6 | Memory deduplication | Medium | Medium | 🟡 High |
-| 7 | Agent-to-agent IPC | High | High | 🟡 High |
-| 8 | Unit tests | High | High | 🟢 Medium |
+| 16 | RuVector full migration (decommission LanceDB) | High | Medium | 🔴 Critical |
+| 17 | Agent performance metrics + Slack reaction feedback | High | Medium | 🔴 Critical |
+| 6 | Memory system consolidation (3 → 1) | Medium | Medium | 🟡 High |
+| 18 | Architect orchestration via bus triggers | High | Low | 🟡 High |
+| 19 | Graceful shutdown / drain on PM2 reload | Medium | Low | 🟡 High |
+| 20 | Bus dead-letter queue | Medium | Low | 🟡 High |
+| 8 | Unit tests (bottleneck, agent loop, ruvector) | High | High | 🟢 Medium |
 | 9 | Prompt versioning | Low | Low | 🟢 Low |
 | 10 | TypeScript migration | Medium | High | 🟢 Low |
-| 11 | Wolf live market data | High | Medium | 💡 Backlog |
-| 12 | CFOBot SMS ingestion | High | Low | 💡 Backlog |
-| 13 | Web dashboard | Medium | Medium | 💡 Backlog |
+| 21 | Dashboard auth | Medium | Low | 🟢 Low |
+| 11 | Wolf live market data (NSE/Kite) | High | Medium | 💡 Backlog |
+| 12 | CFOBot UPI/notification ingestion | High | Low | 💡 Backlog |
 | 14 | SahibaBot encryption | Medium | Low | 💡 Backlog |
-| 15 | CareerBot Phase 2 | Medium | High | 💡 Backlog |
+| 22 | HYDRA local CLI | Medium | Low | 💡 Backlog |
+| 23 | Wolf paper trade P&L analytics | Medium | Low | 💡 Backlog |
+| 24 | Screenpipe deep work session detection | Medium | Medium | 💡 Backlog |
+| 25 | Auditor A/B prompt testing | Low | Medium | 💡 Backlog |
+| 26 | BioBot wearable data integration | High | Medium | 💡 Backlog |
 
 ---
 
-*Last updated: 2026-02-28*
+*Last updated: 2026-03-06*

@@ -3,7 +3,7 @@ import path from 'path';
 import OpenAI from 'openai';
 import { checkBudget, recordUsage } from './bottleneck.js';
 import { brainPath, appendBrain, writeBrain } from './filesystem.js';
-import { searchScreenContext } from './memory.js';
+import { searchScreenContext, addMemory, searchMemory } from './memory.js';
 import { addLog, addConversationMessage, getRecentConversation, pruneConversation } from './db.js';
 import { AGENTS } from './registry.js';
 import { createLogger } from './logger.js';
@@ -208,7 +208,6 @@ export default class Agent {
       let contextSnippets = '';
       if (this.useScreenContext) {
         try {
-          const agentCfg = AGENTS[this.name];
           const query = userMessage.slice(0, 200);
           const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
           const results = await searchScreenContext(query, { limit: 5, since });
@@ -222,21 +221,37 @@ export default class Agent {
         }
       }
 
+      // Always inject relevant agent memories (fed via dashboard or stored from past runs)
+      let memorySnippets = '';
+      try {
+        const memResults = await searchMemory(this.namespace, userMessage.slice(0, 200), 6);
+        if (memResults.length > 0) {
+          memorySnippets = memResults.map(r => `[${r.timestamp?.slice(0, 10) || 'memory'}] ${r.content}`).join('\n\n');
+        }
+      } catch (e) {
+        this.log.warn('LanceDB memory search failed (non-fatal):', e.message);
+      }
+
       // Guard: truncate context to fit model's context window
       const reservedTokens = 6500; // system prompt + user msg + response headroom
       const maxContextBudget = this.maxContextTokens - reservedTokens;
       if (contextSnippets) {
-        contextSnippets = truncateToTokenBudget(contextSnippets, Math.min(maxContextBudget * 0.3, 8000));
+        contextSnippets = truncateToTokenBudget(contextSnippets, Math.min(maxContextBudget * 0.25, 6000));
+      }
+      if (memorySnippets) {
+        memorySnippets = truncateToTokenBudget(memorySnippets, Math.min(maxContextBudget * 0.25, 6000));
       }
       if (context) {
-        context = truncateToTokenBudget(context, Math.min(maxContextBudget * 0.5, 16000));
+        context = truncateToTokenBudget(context, Math.min(maxContextBudget * 0.4, 14000));
       }
 
       // Build messages
       const messages = [];
-      // Merge screen context into the system prompt (some models handle
-      // multiple system messages poorly via OpenRouter)
+      // Merge screen context and memories into the system prompt
       let systemContent = this.systemPrompt || '';
+      if (memorySnippets) {
+        systemContent += `\n\n## Your Memory (relevant past interactions & fed data)\n${memorySnippets}`;
+      }
       if (contextSnippets) {
         systemContent += `\n\n## Live Screen Activity (last 24h)\n${contextSnippets}`;
       }
@@ -272,10 +287,12 @@ export default class Agent {
           estimated,
           limit: this.maxContextTokens
         });
-        const contextIdx = messages.findIndex(m => m.role === 'system' && m.content?.includes('## Live Screen Activity'));
+        const contextIdx = messages.findIndex(m => m.role === 'system' && m.content?.includes('## Your Memory'));
         if (contextIdx !== -1) {
-          // Strip the screen activity section but keep the base system prompt
-          messages[contextIdx].content = messages[contextIdx].content.replace(/\n\n## Live Screen Activity[\s\S]*$/, '');
+          // Strip memory and screen activity sections but keep the base system prompt
+          messages[contextIdx].content = messages[contextIdx].content
+            .replace(/\n\n## Your Memory[\s\S]*?(?=\n\n##|$)/, '')
+            .replace(/\n\n## Live Screen Activity[\s\S]*$/, '');
         }
       }
 
@@ -309,7 +326,7 @@ export default class Agent {
       const transcript = [...messages, assistantMessage];
 
       // Handle tool calls — multi-round loop
-      const MAX_TOOL_ITERATIONS = 10;
+      const MAX_TOOL_ITERATIONS = 15;
       let iterations = 0;
 
       while (
@@ -344,6 +361,27 @@ export default class Agent {
             name: toolName,
             content: toolResult
           });
+        }
+
+        // After tool results are appended, scrub large argument strings from the
+        // PREVIOUS assistant message's tool_calls so they don't snowball the context.
+        // write_repo_file sends full file contents (~1-3K tokens each); keeping them
+        // in every subsequent LLM call is the main driver of 200K+ token runs.
+        const prevAssistant = transcript[transcript.length - 2];
+        if (prevAssistant?.role === 'assistant' && Array.isArray(prevAssistant.tool_calls)) {
+          for (const tc of prevAssistant.tool_calls) {
+            try {
+              const args = JSON.parse(tc.function.arguments);
+              let changed = false;
+              for (const [k, v] of Object.entries(args)) {
+                if (typeof v === 'string' && v.length > 500) {
+                  args[k] = `[${v.length} chars]`;
+                  changed = true;
+                }
+              }
+              if (changed) tc.function.arguments = JSON.stringify(args);
+            } catch { /* non-fatal */ }
+          }
         }
 
         // Re-call LLM with tool results — keep tools available for multi-step reasoning
@@ -474,6 +512,11 @@ export default class Agent {
       await appendBrain(this.namespace, filename, entry);
       // Also write to SQLite daily_logs for structured queries
       try { addLog(this.name, date, response.slice(0, 500), (usage?.outputTokens || 0)); } catch { }
+      // Store interaction summary in LanceDB for semantic memory search
+      try {
+        const summary = `[${date}] ${user ? `User: ${user.slice(0, 150)}\n` : ''}Agent: ${response.slice(0, 350)}`;
+        await addMemory(this.namespace, summary);
+      } catch { }
     } catch (error) {
       this.log.error('log error', { error: error.message });
     }

@@ -51,3 +51,6 @@ When asked to fix something, ALWAYS follow this two-phase workflow:
 - Action items: bulleted list, each with "OWNER: Aatif" or "OWNER: Team" tag.
 - Bug fixes: code snippet + one-paragraph explanation.
 - Documentation: Markdown, concise, developer-audience.
+
+## Memory & Context
+Your past interactions on Edmo tickets are stored in memory. Relevant context from prior conversations (e.g., past fixes, code patterns discussed, ticket history) is automatically injected before each run. Use this context to avoid repeating questions Aatif has already answered and to build on previous work.
