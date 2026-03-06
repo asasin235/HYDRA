@@ -885,6 +885,17 @@ function buildSidebar(activePage) {
           <span>Integrations</span>
         </a>
       </div>
+      <div class="nav-section">
+        <div class="nav-section-title">Vector Stores</div>
+        <a class="nav-item${activePage === 'ruvector' ? ' active' : ''}" href="/ruvector">
+          <span class="nav-icon" style="background:rgba(255,23,68,.1);color:var(--danger)">${SVG.trending}</span>
+          <span>RuVector</span>
+        </a>
+        <a class="nav-item${activePage === 'lancedb' ? ' active' : ''}" href="/lancedb">
+          <span class="nav-icon" style="background:rgba(48,79,254,.1);color:var(--info)">${SVG.database}</span>
+          <span>LanceDB</span>
+        </a>
+      </div>
     </nav>
     <div class="sidebar-footer">
       <div class="theme-toggle" onclick="toggleTheme()" title="Toggle HYDRA / S.H.I.E.L.D. Mode">
@@ -1889,6 +1900,394 @@ async function checkIntegrations() {
   } catch (e) { showToast("I don't feel so good...", 'error'); }
 }
 checkIntegrations();
+<\/script>
+</body></html>`;
+  res.send(html);
+});
+
+// ── RuVector & LanceDB API Endpoints ─────────────────────────────────────────
+
+app.get('/api/ruvector/stats', async (req, res) => {
+  try {
+    const metricsPath = path.join(BRAIN_PATH, 'ruvector', 'metrics.jsonl');
+    const retryPath = path.join(BRAIN_PATH, 'ruvector', 'retry-queue.jsonl');
+    const storagePath = path.join(BRAIN_PATH, 'ruvector', 'ruvector.db');
+
+    const stats = {
+      enabled: process.env.RUVECTOR_ENABLE === '1',
+      dualWrite: process.env.RUVECTOR_DUAL_WRITE === '1',
+      shadowRead: process.env.RUVECTOR_SHADOW_READ === '1',
+      readPrimary: process.env.RUVECTOR_READ_PRIMARY === '1',
+      storageExists: await fs.pathExists(storagePath),
+      metricsExists: await fs.pathExists(metricsPath),
+      retryQueueExists: await fs.pathExists(retryPath),
+      totalQueries: 0,
+      avgLanceMs: 0,
+      avgRuvMs: 0,
+      avgOverlap: 0,
+      errorCount: 0,
+      retryQueueSize: 0
+    };
+
+    // Parse metrics — cap to last 10 000 lines to avoid blocking the event loop
+    if (stats.metricsExists) {
+      const raw = await fs.readFile(metricsPath, 'utf-8');
+      const allLines = raw.split('\n').filter(l => l.trim());
+      stats.totalQueries = allLines.length;
+      const lines = allLines.slice(-10000);
+      let totalLance = 0, totalRuv = 0, totalOverlap = 0, errors = 0, parsedCount = 0;
+      for (const line of lines) {
+        try {
+          const m = JSON.parse(line);
+          totalLance += m.lance_ms || 0;
+          totalRuv += m.ruv_ms || 0;
+          totalOverlap += m.overlap_ratio || 0;
+          if (m.error) errors++;
+          parsedCount++;
+        } catch { /* skip bad lines */ }
+      }
+      if (parsedCount > 0) {
+        stats.avgLanceMs = Math.round((totalLance / parsedCount) * 100) / 100;
+        stats.avgRuvMs = Math.round((totalRuv / parsedCount) * 100) / 100;
+        stats.avgOverlap = Math.round((totalOverlap / parsedCount) * 100) / 100;
+      }
+      stats.errorCount = errors;
+    }
+
+    // Retry queue
+    if (stats.retryQueueExists) {
+      const raw = await fs.readFile(retryPath, 'utf-8');
+      stats.retryQueueSize = raw.split('\n').filter(l => l.trim()).length;
+    }
+
+    res.json(stats);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/ruvector/metrics', async (req, res) => {
+  try {
+    const metricsPath = path.join(BRAIN_PATH, 'ruvector', 'metrics.jsonl');
+    if (!await fs.pathExists(metricsPath)) return res.json([]);
+    const raw = await fs.readFile(metricsPath, 'utf-8');
+    const lines = raw.split('\n').filter(l => l.trim());
+    const lastRaw = parseInt(req.query.last, 10);
+    const last = Number.isFinite(lastRaw) && lastRaw > 0 ? Math.min(lastRaw, 1000) : 50;
+    const entries = lines.slice(-last).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    res.json(entries);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/ruvector/retry-queue', async (req, res) => {
+  try {
+    const retryPath = path.join(BRAIN_PATH, 'ruvector', 'retry-queue.jsonl');
+    if (!await fs.pathExists(retryPath)) return res.json([]);
+    const raw = await fs.readFile(retryPath, 'utf-8');
+    const lines = raw.split('\n').filter(l => l.trim());
+    const lastRaw = parseInt(req.query.last, 10);
+    const last = Number.isFinite(lastRaw) && lastRaw > 0 ? Math.min(lastRaw, 1000) : 50;
+    const entries = lines.slice(-last).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    res.json(entries);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/lancedb/stats', async (req, res) => {
+  try {
+    const lanceDir = path.join(BRAIN_PATH, 'lancedb');
+    const exists = await fs.pathExists(lanceDir);
+    if (!exists) return res.json({ exists: false, tables: {} });
+
+    let mem;
+    try { mem = await import('../core/memory.js'); } catch { return res.json({ exists: true, tables: {}, error: 'LanceDB module not loadable' }); }
+
+    const ldb = (await import('@lancedb/lancedb'));
+    const dbConn = await ldb.connect(lanceDir);
+    const tableNames = await dbConn.tableNames();
+    const tables = {};
+    for (const name of tableNames) {
+      try {
+        const t = await dbConn.openTable(name);
+        const count = await t.countRows();
+        tables[name] = { count };
+      } catch (e) {
+        tables[name] = { count: 0, error: e.message };
+      }
+    }
+    res.json({ exists: true, tables, totalTables: tableNames.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── RuVector Analysis Page ───────────────────────────────────────────────────
+app.get('/ruvector', (req, res) => {
+  const sidebar = buildSidebar('ruvector');
+
+  const html = `${pageHead('RuVector Analysis')}
+<div class="app">
+  ${sidebar}
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-title">${SVG.trending} RuVector Analysis</div>
+        <div class="page-subtitle">Shadow read metrics, overlap analysis, and migration status — "Reality can be whatever I want"</div>
+      </div>
+      <button class="btn" onclick="loadRuvData()">${SVG.refresh} Refresh</button>
+    </div>
+
+    <!-- Status Cards -->
+    <div class="summary-grid" id="ruv-cards">
+      <div class="stat-card"><div class="label">Status</div><div class="value" id="ruv-status">—</div></div>
+      <div class="stat-card" style="--accent-color:#7c4dff"><div class="label">Total Queries</div><div class="value cyan" id="ruv-queries">—</div></div>
+      <div class="stat-card" style="--accent-color:#00c853"><div class="label">Avg Overlap</div><div class="value emerald" id="ruv-overlap">—</div></div>
+      <div class="stat-card" style="--accent-color:#ff1744"><div class="label">Errors / Retries</div><div class="value crimson" id="ruv-errors">—</div></div>
+    </div>
+
+    <!-- Latency Comparison -->
+    <div class="section-title">${SVG.chart} Latency Comparison<span class="section-subtitle">Lance vs RuVector (ms)</span></div>
+    <div class="chart-container"><canvas id="latency-chart"></canvas></div>
+
+    <!-- Config Status -->
+    <div class="section-title">${SVG.settings} Configuration</div>
+    <div class="config-panel" id="ruv-config-panel">
+      <div class="config-grid">
+        <div class="config-field"><label>RUVECTOR_ENABLE</label><input readonly id="cfg-enable"></div>
+        <div class="config-field"><label>RUVECTOR_DUAL_WRITE</label><input readonly id="cfg-dualwrite"></div>
+        <div class="config-field"><label>RUVECTOR_SHADOW_READ</label><input readonly id="cfg-shadow"></div>
+        <div class="config-field"><label>RUVECTOR_READ_PRIMARY</label><input readonly id="cfg-primary"></div>
+      </div>
+    </div>
+
+    <!-- Recent Queries -->
+    <div class="section-title">${SVG.history} Recent Queries<span class="section-subtitle">Last 20 shadow reads</span></div>
+    <div style="overflow-x:auto">
+      <table class="data-table" id="ruv-metrics-table">
+        <thead><tr><th>Time</th><th>Function</th><th>Table</th><th>Lance ms</th><th>RuV ms</th><th>Overlap</th><th>Error</th></tr></thead>
+        <tbody id="ruv-metrics-body"><tr><td colspan="7" style="text-align:center;color:var(--text-muted)">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Retry Queue -->
+    <div class="section-title">${SVG.alert} Retry Queue</div>
+    <div class="log-feed" id="ruv-retry" style="max-height:250px">
+      <div style="padding:14px;color:var(--text-muted);text-align:center;font-size:13px">Loading...</div>
+    </div>
+
+    <div class="refresh-bar">"The hardest choices require the strongest wills." — Thanos</div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+${commonScripts()}
+<script>
+let latencyChart = null;
+async function loadRuvData() {
+  try {
+    const [statsR, metricsR, retryR] = await Promise.all([
+      fetch('/api/ruvector/stats'), fetch('/api/ruvector/metrics?last=50'), fetch('/api/ruvector/retry-queue')
+    ]);
+    const stats = await statsR.json();
+    const metrics = await metricsR.json();
+    const retry = await retryR.json();
+
+    // Cards
+    const statusEl = document.getElementById('ruv-status');
+    if (stats.enabled) {
+      statusEl.textContent = stats.storageExists ? 'Active' : 'Enabled';
+      statusEl.className = 'value emerald';
+    } else {
+      statusEl.textContent = 'Disabled';
+      statusEl.className = 'value';
+      statusEl.style.color = 'var(--text-muted)';
+    }
+    document.getElementById('ruv-queries').textContent = stats.totalQueries.toLocaleString();
+    document.getElementById('ruv-overlap').textContent = (stats.avgOverlap * 100).toFixed(1) + '%';
+    document.getElementById('ruv-errors').textContent = stats.errorCount + ' / ' + stats.retryQueueSize;
+
+    // Config
+    document.getElementById('cfg-enable').value = stats.enabled ? '1 (ON)' : '0 (OFF)';
+    document.getElementById('cfg-dualwrite').value = stats.dualWrite ? '1 (ON)' : '0 (OFF)';
+    document.getElementById('cfg-shadow').value = stats.shadowRead ? '1 (ON)' : '0 (OFF)';
+    document.getElementById('cfg-primary').value = stats.readPrimary ? '1 (ON)' : '0 (OFF)';
+
+    // Metrics table
+    const tbody = document.getElementById('ruv-metrics-body');
+    if (metrics.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No shadow read data yet. Enable RUVECTOR_SHADOW_READ=1.</td></tr>';
+    } else {
+      tbody.innerHTML = metrics.slice(-20).reverse().map(m => {
+        const ts = m.ts ? new Date(m.ts).toLocaleTimeString() : '';
+        const errBadge = m.error ? '<span style="color:var(--danger)">✗</span>' : '<span style="color:var(--success)">✓</span>';
+        return '<tr>' +
+          '<td class="mono">' + ts + '</td>' +
+          '<td>' + (m.fn || '') + '</td>' +
+          '<td>' + (m.table || '') + '</td>' +
+          '<td class="mono">' + (m.lance_ms || 0).toFixed(1) + '</td>' +
+          '<td class="mono">' + (m.ruv_ms || 0).toFixed(1) + '</td>' +
+          '<td class="mono">' + ((m.overlap_ratio || 0) * 100).toFixed(0) + '%</td>' +
+          '<td>' + errBadge + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    // Latency chart
+    if (latencyChart) latencyChart.destroy();
+    const last30 = metrics.slice(-30);
+    const labels = last30.map((m, i) => m.ts ? new Date(m.ts).toLocaleTimeString() : i);
+    const ctx = document.getElementById('latency-chart').getContext('2d');
+    latencyChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'LanceDB ms', data: last30.map(m => m.lance_ms || 0), borderColor: '#00e5ff', backgroundColor: 'rgba(0,229,255,.1)', tension: .4, fill: true },
+          { label: 'RuVector ms', data: last30.map(m => m.ruv_ms || 0), borderColor: '#ff1744', backgroundColor: 'rgba(255,23,68,.1)', tension: .4, fill: true }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#c8d6e5' } } },
+        scales: {
+          x: { ticks: { color: '#556', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,.03)' } },
+          y: { ticks: { color: '#556' }, grid: { color: 'rgba(255,255,255,.03)' }, title: { display: true, text: 'ms', color: '#556' } }
+        }
+      }
+    });
+
+    // Retry queue
+    const retryEl = document.getElementById('ruv-retry');
+    if (retry.length === 0) {
+      retryEl.innerHTML = '<div style="padding:14px;color:var(--success);text-align:center;font-size:13px">✅ Retry queue empty — all writes successful</div>';
+    } else {
+      retryEl.innerHTML = retry.slice(-20).reverse().map(r => {
+        return '<div class="log-entry">' +
+          '<span class="log-agent">' + (r.table || '') + '</span>' +
+          '<span class="log-date">' + (r.ts || '') + '</span>' +
+          '<span class="log-text">' + (r.id || '') + ' — ' + (r.error || 'unknown error') + '</span>' +
+        '</div>';
+      }).join('');
+    }
+  } catch (e) { showToast('Failed to load RuVector data', 'error'); }
+}
+loadRuvData();
+<\/script>
+</body></html>`;
+  res.send(html);
+});
+
+// ── LanceDB Analysis Page ────────────────────────────────────────────────────
+app.get('/lancedb', (req, res) => {
+  const sidebar = buildSidebar('lancedb');
+
+  const html = `${pageHead('LanceDB Analysis')}
+<div class="app">
+  ${sidebar}
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-title">${SVG.database} LanceDB Analysis</div>
+        <div class="page-subtitle">Table statistics, record counts, and storage health — "I can do this all day"</div>
+      </div>
+      <button class="btn" onclick="loadLanceData()">${SVG.refresh} Refresh</button>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="summary-grid" id="lance-cards">
+      <div class="stat-card"><div class="label">Status</div><div class="value emerald" id="lance-status">—</div></div>
+      <div class="stat-card" style="--accent-color:#304ffe"><div class="label">Tables</div><div class="value cyan" id="lance-tables">—</div></div>
+      <div class="stat-card" style="--accent-color:#00c853"><div class="label">Total Records</div><div class="value emerald" id="lance-records">—</div></div>
+      <div class="stat-card" style="--accent-color:#ffd600"><div class="label">Embedding Dim</div><div class="value amber" id="lance-dim">1536</div></div>
+    </div>
+
+    <!-- Table Distribution Chart -->
+    <div class="section-title">${SVG.chart} Records by Table</div>
+    <div class="chart-container"><canvas id="lance-chart"></canvas></div>
+
+    <!-- Table Details -->
+    <div class="section-title">${SVG.database} Table Details</div>
+    <div style="overflow-x:auto">
+      <table class="data-table" id="lance-table-details">
+        <thead><tr><th>Table</th><th>Records</th><th>Status</th></tr></thead>
+        <tbody id="lance-tbody"><tr><td colspan="3" style="text-align:center;color:var(--text-muted)">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Quick Search Test -->
+    <div class="section-title">${SVG.search} Quick Search Test</div>
+    <div class="search-bar">
+      <input id="lance-search-input" placeholder="Enter a search query to test LanceDB..." onkeydown="if(event.key==='Enter')testLanceSearch()">
+      <button class="btn" onclick="testLanceSearch()">${SVG.search} Test</button>
+    </div>
+    <div id="lance-search-results" style="margin-top:12px"></div>
+
+    <div class="refresh-bar">"I am Groot." — Groot</div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+${commonScripts()}
+<script>
+let lanceChart = null;
+async function loadLanceData() {
+  try {
+    const r = await fetch('/api/lancedb/stats');
+    const data = await r.json();
+
+    document.getElementById('lance-status').textContent = data.exists ? 'Connected' : 'Not Found';
+    document.getElementById('lance-tables').textContent = data.totalTables || 0;
+
+    const tables = data.tables || {};
+    let total = 0;
+    const names = Object.keys(tables);
+    const counts = [];
+
+    const tbody = document.getElementById('lance-tbody');
+    tbody.innerHTML = '';
+    for (const [name, info] of Object.entries(tables)) {
+      const count = info.count || 0;
+      total += count;
+      counts.push(count);
+      const status = info.error ? '<span style="color:var(--danger)">Error: ' + info.error + '</span>' : '<span style="color:var(--success)">✓ Healthy</span>';
+      tbody.innerHTML += '<tr><td style="font-weight:500">' + name + '</td><td class="mono">' + count.toLocaleString() + '</td><td>' + status + '</td></tr>';
+    }
+    document.getElementById('lance-records').textContent = total.toLocaleString();
+
+    // Chart
+    if (lanceChart) lanceChart.destroy();
+    const ctx = document.getElementById('lance-chart').getContext('2d');
+    const colors = ['#00e5ff', '#7c4dff', '#ff6d00', '#00c853', '#ff1744', '#ffd600', '#304ffe'];
+    lanceChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: names,
+        datasets: [{ data: counts, backgroundColor: names.map((_, i) => colors[i % colors.length] + '40'), borderColor: names.map((_, i) => colors[i % colors.length]), borderWidth: 2 }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { color: '#c8d6e5', padding: 16 } } }
+      }
+    });
+  } catch (e) { showToast('Failed to load LanceDB data', 'error'); }
+}
+
+async function testLanceSearch() {
+  const q = document.getElementById('lance-search-input').value.trim();
+  if (!q) return;
+  const container = document.getElementById('lance-search-results');
+  container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Searching...</div>';
+  try {
+    const r = await fetch('/api/memory/search?q=' + encodeURIComponent(q));
+    const results = await r.json();
+    if (results.error) { container.innerHTML = '<div style="color:var(--danger);font-size:13px">' + results.error + '</div>'; return; }
+    if (results.length === 0) { container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No results found.</div>'; return; }
+    container.innerHTML = results.map(m => {
+      const text = (m.content || m.summary || JSON.stringify(m)).replace(/</g, '&lt;');
+      return '<div class="memory-card">' +
+        '<div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">' + (m.agent || '') + (m.timestamp ? ' | ' + m.timestamp : '') + '</div>' +
+        '<div style="font-size:13px;color:var(--text-secondary);line-height:1.6">' + text.slice(0, 300) + '</div>' +
+        (m.score !== undefined ? '<div style="font-size:10px;color:var(--text-muted);margin-top:6px">Distance: ' + (m.score || 0).toFixed(3) + '</div>' : '') +
+      '</div>';
+    }).join('');
+  } catch (e) { showToast('Search failed', 'error'); }
+}
+loadLanceData();
 <\/script>
 </body></html>`;
   res.send(html);

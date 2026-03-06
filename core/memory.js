@@ -9,6 +9,13 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const EMBEDDING_MODEL = 'openai/text-embedding-3-small';
 const EMBEDDING_DIM = 1536; // text-embedding-3-small dimension
 
+// ── RuVector env flags (all default off) ─────────────────────────────────────
+const RUV_ENABLE         = process.env.RUVECTOR_ENABLE === '1';
+const RUV_DUAL_WRITE     = process.env.RUVECTOR_DUAL_WRITE === '1';
+const RUV_SHADOW_READ    = process.env.RUVECTOR_SHADOW_READ === '1';
+const RUV_READ_PRIMARY   = process.env.RUVECTOR_READ_PRIMARY === '1';
+const RUV_METRICS_PATH   = process.env.RUVECTOR_METRICS_PATH || path.join(BRAIN_BASE, 'ruvector', 'metrics.jsonl');
+
 let db = null;
 let memoriesTable = null;
 let dailyLogsTable = null;
@@ -16,6 +23,9 @@ let reflectionsTable = null;
 let screenActivityTable = null;
 let audioTranscriptsTable = null;
 let contextFeedTable = null;
+
+// RuVector module ref (lazy-loaded)
+let ruv = null;
 
 /**
  * Get embedding from OpenRouter using text-embedding-3-small
@@ -55,6 +65,102 @@ async function getEmbedding(text) {
     console.error('[memory] Failed to get embedding:', error.message);
     return new Array(EMBEDDING_DIM).fill(0);
   }
+}
+
+// ── RuVector helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Lazily load and init RuVector if enabled.
+ * Safe — never throws, never blocks LanceDB.
+ */
+async function ensureRuVector() {
+  if (!RUV_ENABLE || ruv) return;
+  try {
+    ruv = await import('./ruvectorStore.js');
+    await ruv.initRuVector();
+    if (!ruv.isAvailable()) {
+      console.warn('[memory] RuVector loaded but unavailable, disabling.');
+      ruv = null;
+    } else {
+      console.log('[memory] RuVector integration active');
+    }
+  } catch (err) {
+    console.error('[memory] RuVector import failed (continuing without):', err.message);
+    ruv = null;
+  }
+}
+
+/**
+ * Fire-and-forget dual-write to RuVector. Never blocks or throws.
+ */
+function dualWrite(tableName, record) {
+  if (!RUV_ENABLE || !RUV_DUAL_WRITE || !ruv || !ruv.isAvailable()) return;
+  // Intentionally not awaited — fire-and-forget
+  ruv.upsert(tableName, record).catch(err => {
+    console.error(`[memory] RuVector dual-write failed for ${tableName}:`, err.message);
+  });
+}
+
+/**
+ * Perform shadow read on RuVector and record metrics.
+ * Returns RuVector results if RUV_READ_PRIMARY is set; otherwise returns null.
+ * @param {string} funcName - Name of the calling search function
+ * @param {string} tableName - Logical table to search
+ * @param {number[]} queryEmbedding - Query vector
+ * @param {object} opts - Search options (limit, agent, source_type, since)
+ * @param {number} lanceDurationMs - LanceDB search latency
+ * @param {Array} lanceResults - LanceDB results (with id field)
+ * @returns {Promise<Array|null>} RuVector results if primary, or null
+ */
+async function shadowRead(funcName, tableName, queryEmbedding, opts, lanceDurationMs, lanceResults) {
+  if (!RUV_ENABLE || (!RUV_SHADOW_READ && !RUV_READ_PRIMARY) || !ruv || !ruv.isAvailable()) {
+    return null;
+  }
+
+  let ruvResults = [];
+  let ruvMs = 0;
+  let ruvError = null;
+
+  try {
+    const ruvStart = performance.now();
+    ruvResults = await ruv.search(tableName, queryEmbedding, opts);
+    ruvMs = Math.round((performance.now() - ruvStart) * 100) / 100;
+  } catch (err) {
+    ruvError = err.message;
+    console.error(`[memory] RuVector shadow read failed in ${funcName}:`, err.message);
+  }
+
+  // Compute overlap
+  const lanceIds = lanceResults.map(r => r.id).slice(0, opts.limit || 5);
+  const ruvIds = ruvResults.map(r => r.id).slice(0, opts.limit || 5);
+  const overlap = lanceIds.filter(id => ruvIds.includes(id)).length;
+  const overlapRatio = lanceIds.length > 0 ? Math.round((overlap / lanceIds.length) * 100) / 100 : 0;
+
+  // Write metrics line
+  const metricsLine = {
+    ts: new Date().toISOString(),
+    fn: funcName,
+    table: tableName,
+    limit: opts.limit || 5,
+    filters: { agent: opts.agent, source_type: opts.source_type, since: opts.since },
+    lance_ms: lanceDurationMs,
+    ruv_ms: ruvMs,
+    lance_ids: lanceIds,
+    ruv_ids: ruvIds,
+    overlap_ratio: overlapRatio,
+    lance_backend: 'distance (lower=better)',
+    ruv_backend: 'score (higher=better)',
+    error: ruvError
+  };
+
+  ruv.writeJsonlLine(RUV_METRICS_PATH, metricsLine).catch(() => {});
+
+  // If read-primary, return RuVector results
+  if (RUV_READ_PRIMARY && !ruvError) {
+    return ruvResults;
+  }
+
+  return null;
 }
 
 /**
@@ -164,6 +270,9 @@ async function initDb() {
   } else {
     reflectionsTable = await db.openTable('reflections');
   }
+
+  // Initialize RuVector if enabled
+  await ensureRuVector();
 }
 
 /**
@@ -187,6 +296,13 @@ export async function addMemory(agent, content) {
       vector: embedding
     }]);
 
+    // Dual-write to RuVector
+    dualWrite('memories', {
+      id,
+      vector: embedding,
+      metadata: { agent, content, timestamp: new Date().toISOString() }
+    });
+
     return id;
   } catch (error) {
     console.error('[memory] addMemory failed:', error.message);
@@ -207,22 +323,39 @@ export async function searchMemory(agent, query, limit = 5) {
 
     const queryEmbedding = await getEmbedding(query);
 
+    const lanceStart = performance.now();
     let search = memoriesTable.search(queryEmbedding).limit(limit * 2);
-
     const results = await search.toArray();
+    const lanceDurationMs = Math.round((performance.now() - lanceStart) * 100) / 100;
 
     // Filter by agent if specified
     let filtered = agent
       ? results.filter(r => r.agent === agent)
       : results;
 
-    return filtered.slice(0, limit).map(r => ({
+    const lanceResults = filtered.slice(0, limit).map(r => ({
       id: r.id,
       agent: r.agent,
       content: r.content,
       timestamp: r.timestamp,
       score: r._distance
     }));
+
+    // Shadow read
+    const ruvResults = await shadowRead('searchMemory', 'memories', queryEmbedding,
+      { limit, agent }, lanceDurationMs, lanceResults);
+
+    if (ruvResults) {
+      return ruvResults.map(r => ({
+        id: r.id,
+        agent: r.metadata?.agent || '',
+        content: r.metadata?.content || '',
+        timestamp: r.metadata?.timestamp || '',
+        score: r.score
+      }));
+    }
+
+    return lanceResults;
   } catch (error) {
     console.error('[memory] searchMemory failed:', error.message);
     return [];
@@ -251,6 +384,13 @@ export async function addLog(agent, date, summary) {
       vector: embedding
     }]);
 
+    // Dual-write to RuVector
+    dualWrite('daily_logs', {
+      id,
+      vector: embedding,
+      metadata: { agent, date, summary }
+    });
+
     return id;
   } catch (error) {
     console.error('[memory] addLog failed:', error.message);
@@ -270,21 +410,39 @@ export async function searchLogs(agent, query, limit = 5) {
     await initDb();
 
     const queryEmbedding = await getEmbedding(query);
-    let search = dailyLogsTable.search(queryEmbedding).limit(limit * 2);
 
+    const lanceStart = performance.now();
+    let search = dailyLogsTable.search(queryEmbedding).limit(limit * 2);
     const results = await search.toArray();
+    const lanceDurationMs = Math.round((performance.now() - lanceStart) * 100) / 100;
 
     let filtered = agent
       ? results.filter(r => r.agent === agent)
       : results;
 
-    return filtered.slice(0, limit).map(r => ({
+    const lanceResults = filtered.slice(0, limit).map(r => ({
       id: r.id,
       agent: r.agent,
       date: r.date,
       summary: r.summary,
       score: r._distance
     }));
+
+    // Shadow read
+    const ruvResults = await shadowRead('searchLogs', 'daily_logs', queryEmbedding,
+      { limit, agent }, lanceDurationMs, lanceResults);
+
+    if (ruvResults) {
+      return ruvResults.map(r => ({
+        id: r.id,
+        agent: r.metadata?.agent || '',
+        date: r.metadata?.date || '',
+        summary: r.metadata?.summary || r.metadata?.content || '',
+        score: r.score
+      }));
+    }
+
+    return lanceResults;
   } catch (error) {
     console.error('[memory] searchLogs failed:', error.message);
     return [];
@@ -315,6 +473,13 @@ export async function addReflection(agent, week, data) {
       vector: embedding
     }]);
 
+    // Dual-write to RuVector
+    dualWrite('reflections', {
+      id,
+      vector: embedding,
+      metadata: { agent, week, score: String(data.score || 0), changes_json: JSON.stringify(data.changes || {}), content }
+    });
+
     return id;
   } catch (error) {
     console.error('[memory] addReflection failed:', error.message);
@@ -334,11 +499,13 @@ export async function getReflections(agent, limit = 10) {
 
     // Use a generic query embedding for recent reflections
     const queryEmbedding = await getEmbedding(`${agent} weekly reflection performance`);
+
+    const lanceStart = performance.now();
     let search = reflectionsTable.search(queryEmbedding).limit(limit * 2);
-
     const results = await search.toArray();
+    const lanceDurationMs = Math.round((performance.now() - lanceStart) * 100) / 100;
 
-    return results
+    const lanceResults = results
       .filter(r => r.agent === agent)
       .slice(0, limit)
       .map(r => ({
@@ -348,6 +515,12 @@ export async function getReflections(agent, limit = 10) {
         score: r.score,
         changes: JSON.parse(r.changes_json || '{}')
       }));
+
+    // Shadow read (for metrics only — reflections have a different output shape)
+    await shadowRead('getReflections', 'reflections', queryEmbedding,
+      { limit, agent }, lanceDurationMs, lanceResults);
+
+    return lanceResults;
   } catch (error) {
     console.error('[memory] getReflections failed:', error.message);
     return [];
@@ -384,8 +557,9 @@ export async function addScreenActivity({ source, timestamp, apps = [], summary,
     }]);
 
     // Also add to unified context_feed
+    const ctxId = uuidv4();
     await contextFeedTable.add([{
-      id: uuidv4(),
+      id: ctxId,
       source_type: 'screen',
       source,
       timestamp: timestamp || new Date().toISOString(),
@@ -393,6 +567,31 @@ export async function addScreenActivity({ source, timestamp, apps = [], summary,
       metadata_json: JSON.stringify({ apps, has_raw: !!raw_text }),
       vector: embedding
     }]);
+
+    // Dual-write both to RuVector
+    dualWrite('screen_activity', {
+      id,
+      vector: embedding,
+      metadata: {
+        source,
+        timestamp: timestamp || new Date().toISOString(),
+        apps: apps.join(', '),
+        summary,
+        content: textForEmbed
+      }
+    });
+    dualWrite('context_feed', {
+      id: ctxId,
+      vector: embedding,
+      metadata: {
+        source_type: 'screen',
+        source,
+        timestamp: timestamp || new Date().toISOString(),
+        content: textForEmbed,
+        metadata_json: JSON.stringify({ apps, has_raw: !!raw_text }),
+        parent_id: id
+      }
+    });
 
     return id;
   } catch (error) {
@@ -413,14 +612,17 @@ export async function searchScreenContext(query, { limit = 5, since } = {}) {
   try {
     await initDb();
     const queryEmbedding = await getEmbedding(query);
+
+    const lanceStart = performance.now();
     const results = await screenActivityTable.search(queryEmbedding).limit(limit * 2).toArray();
+    const lanceDurationMs = Math.round((performance.now() - lanceStart) * 100) / 100;
 
     let filtered = results;
     if (since) {
       filtered = filtered.filter(r => r.timestamp >= since);
     }
 
-    return filtered.slice(0, limit).map(r => ({
+    const lanceResults = filtered.slice(0, limit).map(r => ({
       id: r.id,
       source: r.source,
       timestamp: r.timestamp,
@@ -428,6 +630,23 @@ export async function searchScreenContext(query, { limit = 5, since } = {}) {
       summary: r.summary,
       score: r._distance
     }));
+
+    // Shadow read
+    const ruvResults = await shadowRead('searchScreenContext', 'screen_activity', queryEmbedding,
+      { limit, since }, lanceDurationMs, lanceResults);
+
+    if (ruvResults) {
+      return ruvResults.map(r => ({
+        id: r.id,
+        source: r.metadata?.source || '',
+        timestamp: r.metadata?.timestamp || '',
+        apps: r.metadata?.apps || '',
+        summary: r.metadata?.summary || r.metadata?.content || '',
+        score: r.score
+      }));
+    }
+
+    return lanceResults;
   } catch (error) {
     console.error('[memory] searchScreenContext failed:', error.message);
     return [];
@@ -468,8 +687,9 @@ export async function addAudioTranscript({ source, timestamp, filename, transcri
     }]);
 
     // Also add to unified context_feed
+    const ctxId = uuidv4();
     await contextFeedTable.add([{
-      id: uuidv4(),
+      id: ctxId,
       source_type: 'audio',
       source,
       timestamp: timestamp || new Date().toISOString(),
@@ -477,6 +697,33 @@ export async function addAudioTranscript({ source, timestamp, filename, transcri
       metadata_json: JSON.stringify({ filename, duration_s, tags }),
       vector: embedding
     }]);
+
+    // Dual-write both to RuVector
+    dualWrite('audio_transcripts', {
+      id,
+      vector: embedding,
+      metadata: {
+        source,
+        timestamp: timestamp || new Date().toISOString(),
+        filename: filename || '',
+        summary,
+        duration_s: String(duration_s),
+        tags: tags.join(', '),
+        content: textForEmbed
+      }
+    });
+    dualWrite('context_feed', {
+      id: ctxId,
+      vector: embedding,
+      metadata: {
+        source_type: 'audio',
+        source,
+        timestamp: timestamp || new Date().toISOString(),
+        content: textForEmbed,
+        metadata_json: JSON.stringify({ filename, duration_s, tags }),
+        parent_id: id
+      }
+    });
 
     return id;
   } catch (error) {
@@ -497,14 +744,17 @@ export async function searchAudioContext(query, { limit = 5, since } = {}) {
   try {
     await initDb();
     const queryEmbedding = await getEmbedding(query);
+
+    const lanceStart = performance.now();
     const results = await audioTranscriptsTable.search(queryEmbedding).limit(limit * 2).toArray();
+    const lanceDurationMs = Math.round((performance.now() - lanceStart) * 100) / 100;
 
     let filtered = results;
     if (since) {
       filtered = filtered.filter(r => r.timestamp >= since);
     }
 
-    return filtered.slice(0, limit).map(r => ({
+    const lanceResults = filtered.slice(0, limit).map(r => ({
       id: r.id,
       source: r.source,
       timestamp: r.timestamp,
@@ -514,6 +764,25 @@ export async function searchAudioContext(query, { limit = 5, since } = {}) {
       tags: r.tags,
       score: r._distance
     }));
+
+    // Shadow read
+    const ruvResults = await shadowRead('searchAudioContext', 'audio_transcripts', queryEmbedding,
+      { limit, since }, lanceDurationMs, lanceResults);
+
+    if (ruvResults) {
+      return ruvResults.map(r => ({
+        id: r.id,
+        source: r.metadata?.source || '',
+        timestamp: r.metadata?.timestamp || '',
+        filename: r.metadata?.filename || '',
+        summary: r.metadata?.summary || r.metadata?.content || '',
+        duration_s: parseFloat(r.metadata?.duration_s || '0'),
+        tags: r.metadata?.tags || '',
+        score: r.score
+      }));
+    }
+
+    return lanceResults;
   } catch (error) {
     console.error('[memory] searchAudioContext failed:', error.message);
     return [];
@@ -535,7 +804,10 @@ export async function searchAllContext(query, { limit = 10, source_type, since }
   try {
     await initDb();
     const queryEmbedding = await getEmbedding(query);
+
+    const lanceStart = performance.now();
     const results = await contextFeedTable.search(queryEmbedding).limit(limit * 3).toArray();
+    const lanceDurationMs = Math.round((performance.now() - lanceStart) * 100) / 100;
 
     let filtered = results;
     if (source_type) {
@@ -545,7 +817,7 @@ export async function searchAllContext(query, { limit = 10, source_type, since }
       filtered = filtered.filter(r => r.timestamp >= since);
     }
 
-    return filtered.slice(0, limit).map(r => ({
+    const lanceResults = filtered.slice(0, limit).map(r => ({
       id: r.id,
       source_type: r.source_type,
       source: r.source,
@@ -554,6 +826,24 @@ export async function searchAllContext(query, { limit = 10, source_type, since }
       metadata: JSON.parse(r.metadata_json || '{}'),
       score: r._distance
     }));
+
+    // Shadow read
+    const ruvResults = await shadowRead('searchAllContext', 'context_feed', queryEmbedding,
+      { limit, source_type, since }, lanceDurationMs, lanceResults);
+
+    if (ruvResults) {
+      return ruvResults.map(r => ({
+        id: r.id,
+        source_type: r.metadata?.source_type || '',
+        source: r.metadata?.source || '',
+        timestamp: r.metadata?.timestamp || '',
+        content: r.metadata?.content || '',
+        metadata: r.metadata?.metadata_json ? JSON.parse(r.metadata.metadata_json) : {},
+        score: r.score
+      }));
+    }
+
+    return lanceResults;
   } catch (error) {
     console.error('[memory] searchAllContext failed:', error.message);
     return [];
@@ -572,5 +862,9 @@ export async function closeMemory() {
     screenActivityTable = null;
     audioTranscriptsTable = null;
     contextFeedTable = null;
+  }
+  if (ruv) {
+    try { ruv.closeRuVector(); } catch { /* ignore */ }
+    ruv = null;
   }
 }
