@@ -301,8 +301,8 @@ export async function handleSlackCommand(text) {
   return await jarvis.run(`Execute home command: "${text}"`, ctx);
 }
 
-// Every 30 minutes
-cron.schedule('*/30 * * * *', async () => { await checkAutomations(); });
+// Every 30 minutes — DISABLED: was auto-switching lights on every 30 min
+// cron.schedule('*/30 * * * *', async () => { await checkAutomations(); });
 
 if (process.argv.includes('--check-now')) {
   checkAutomations();
