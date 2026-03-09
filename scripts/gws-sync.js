@@ -80,7 +80,7 @@ async function syncGmail(profile, agentName) {
       newSeen.add(id);
       count++;
     } catch (err) {
-      logger.warn({ agentName, err: err.message }, 'Failed to store email memory');
+      logger.warn('Failed to store email memory', { agentName, err: err.message });
     }
   }
 
@@ -130,7 +130,7 @@ async function syncCalendar(profile, agentName) {
       newSeen.add(dedupKey);
       count++;
     } catch (err) {
-      logger.warn({ agentName, err: err.message }, 'Failed to store calendar memory');
+      logger.warn('Failed to store calendar memory', { agentName, err: err.message });
     }
   }
 
@@ -175,7 +175,7 @@ async function syncGChat(agentName) {
         await addMemory(agentName, content);
         count++;
       } catch (err) {
-        logger.warn({ spaceName, err: err.message }, 'Failed to store GChat memory');
+        logger.warn('Failed to store GChat memory', { spaceName, err: err.message });
       }
     }
 
@@ -200,7 +200,7 @@ async function runSync() {
 
     const authed = await isAuthenticated(profileName);
     if (!authed) {
-      logger.info({ profile: profileName }, `Not authenticated — skipping. Run: ./scripts/gws-auth-setup.sh ${profileName}`);
+      logger.info(`Not authenticated — skipping. Run: ./scripts/gws-auth-setup.sh ${profileName}`, { profile: profileName });
       results[profileName] = { skipped: true };
       continue;
     }
@@ -210,13 +210,13 @@ async function runSync() {
     try {
       profileResults.emails = await syncGmail(profileName, agentName);
     } catch (err) {
-      logger.warn({ profile: profileName, err: err.message }, 'Gmail sync error');
+      logger.warn('Gmail sync error', { profile: profileName, err: err.message });
     }
 
     try {
       profileResults.calendar = await syncCalendar(profileName, agentName);
     } catch (err) {
-      logger.warn({ profile: profileName, err: err.message }, 'Calendar sync error');
+      logger.warn('Calendar sync error', { profile: profileName, err: err.message });
     }
 
     // GChat only for work profile
@@ -224,7 +224,7 @@ async function runSync() {
       try {
         profileResults.chat = await syncGChat(agentName);
       } catch (err) {
-        logger.warn({ profile: profileName, err: err.message }, 'GChat sync error');
+        logger.warn('GChat sync error', { profile: profileName, err: err.message });
       }
     }
 
@@ -236,14 +236,14 @@ async function runSync() {
     return sum + (r.emails || 0) + (r.calendar || 0) + (r.chat || 0);
   }, 0);
 
-  logger.info({ results, total }, 'gws-sync: cycle complete');
+  logger.info('gws-sync: cycle complete', { results, total });
   return results;
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 async function main() {
-  logger.info({ interval: POLL_INTERVAL, once: ONCE }, 'gws-sync starting');
+  logger.info('gws-sync starting', { interval: POLL_INTERVAL, once: ONCE });
 
   await runSync();
 
@@ -254,13 +254,13 @@ async function main() {
       try {
         await runSync();
       } catch (err) {
-        logger.error({ err: err.message }, 'gws-sync poll error');
+        logger.error('gws-sync poll error', { err: err.message });
       }
     }, POLL_INTERVAL);
   }
 }
 
 main().catch(err => {
-  logger.error({ err: err.message }, 'gws-sync fatal error');
+  logger.error('gws-sync fatal error', { err: err.message });
   process.exit(1);
 });

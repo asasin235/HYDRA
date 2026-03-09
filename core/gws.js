@@ -63,7 +63,7 @@ export async function execGws(profile, args, timeout = 30000) {
       timeout,
       maxBuffer: 5 * 1024 * 1024,
     });
-    if (stderr) logger.debug({ profile, cmd: args.slice(0, 3).join(' '), stderr: stderr.slice(0, 200) }, 'gws stderr');
+    if (stderr) logger.debug('gws stderr', { profile, cmd: args.slice(0, 3).join(' '), stderr: stderr.slice(0, 200) });
     return stdout.trim();
   } catch (err) {
     const msg = err.message || '';
@@ -87,7 +87,11 @@ export async function execGws(profile, args, timeout = 30000) {
 export async function isAuthenticated(profile) {
   try {
     const out = await execGws(profile, ['auth', 'status'], 5000);
-    return out.toLowerCase().includes('authenticated') || out.toLowerCase().includes('access token') || out.toLowerCase().includes('token');
+    const data = JSON.parse(out);
+    // auth_method is 'none' when not authenticated; any other value means authed
+    return data.auth_method !== undefined
+      ? data.auth_method !== 'none'
+      : out.toLowerCase().includes('authenticated') || out.toLowerCase().includes('access token');
   } catch {
     return false;
   }
@@ -114,7 +118,7 @@ export async function triageEmails(profile, {
     return JSON.parse(out);
   } catch (err) {
     if (err.message === NOT_AUTHED_MSG) return null;
-    logger.warn({ profile, err: err.message }, 'triageEmails failed');
+    logger.warn('triageEmails failed', { profile, err: err.message });
     return null;
   }
 }
@@ -172,7 +176,7 @@ export async function getAgenda(profile, { days = 1, today = false, week = false
     return JSON.parse(out);
   } catch (err) {
     if (err.message === NOT_AUTHED_MSG) return null;
-    logger.warn({ profile, err: err.message }, 'getAgenda failed');
+    logger.warn('getAgenda failed', { profile, err: err.message });
     return null;
   }
 }
@@ -210,7 +214,7 @@ export async function listSpaces(profile) {
     return data.spaces || (Array.isArray(data) ? data : []);
   } catch (err) {
     if (err.message === NOT_AUTHED_MSG) return null;
-    logger.warn({ profile, err: err.message }, 'listSpaces failed');
+    logger.warn('listSpaces failed', { profile, err: err.message });
     return null;
   }
 }
@@ -231,7 +235,7 @@ export async function listMessages(profile, spaceName, { pageSize = 20 } = {}) {
     return data.messages || (Array.isArray(data) ? data : []);
   } catch (err) {
     if (err.message === NOT_AUTHED_MSG) return null;
-    logger.warn({ profile, spaceName, err: err.message }, 'listMessages failed');
+    logger.warn('listMessages failed', { profile, spaceName, err: err.message });
     return null;
   }
 }
