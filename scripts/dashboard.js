@@ -674,8 +674,8 @@ ${transcript}
 
       // Publish to bus so RuVector-holding processes (gateway) can dual-write to their store
       try {
-        const { publishBus } = await import('../core/bus.js');
-        await publishBus('audio.transcribed', {
+        const { publish } = await import('../core/bus.js');
+        await publish('audio.transcribed', {
           id: externalId,
           source,
           timestamp: startTime,
@@ -777,8 +777,8 @@ app.post('/plaud/sync', async (req, res) => {
     }
 
     // Publish trigger event on the bus (plaud-sync.js will pick it up)
-    const { publishBus } = await import('../core/bus.js');
-    await publishBus('plaud.sync.trigger', { manual: true }).catch(() => {});
+    const { publish } = await import('../core/bus.js');
+    await publish('plaud.sync.trigger', { manual: true }).catch(() => {});
 
     res.json({ ok: true, message: 'Sync triggered' });
   } catch (e) {
