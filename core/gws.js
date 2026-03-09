@@ -117,7 +117,8 @@ export async function triageEmails(profile, {
       '--max', String(max),
       '--query', query,
     ]);
-    return JSON.parse(out);
+    const data = JSON.parse(out);
+    return data.messages || (Array.isArray(data) ? data : []);
   } catch (err) {
     if (err.message === NOT_AUTHED_MSG) return null;
     logger.warn('triageEmails failed', { profile, err: err.message });
@@ -175,7 +176,8 @@ export async function getAgenda(profile, { days = 1, today = false, week = false
 
   try {
     const out = await execGws(profile, args);
-    return JSON.parse(out);
+    const data = JSON.parse(out);
+    return data.events || (Array.isArray(data) ? data : []);
   } catch (err) {
     if (err.message === NOT_AUTHED_MSG) return null;
     logger.warn('getAgenda failed', { profile, err: err.message });
