@@ -155,8 +155,8 @@ async function shadowRead(funcName, tableName, queryEmbedding, opts, lanceDurati
 
   ruv.writeJsonlLine(RUV_METRICS_PATH, metricsLine).catch(() => {});
 
-  // If read-primary, return RuVector results
-  if (RUV_READ_PRIMARY && !ruvError) {
+  // If read-primary, return RuVector results — but only if non-empty, else fall back to LanceDB
+  if (RUV_READ_PRIMARY && !ruvError && ruvResults.length > 0) {
     return ruvResults;
   }
 

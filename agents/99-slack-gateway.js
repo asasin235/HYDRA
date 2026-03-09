@@ -8,6 +8,8 @@ import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { getDebt, getState, setState, getTransactions, getDailySpend, getSpendByCategory, getRecentTransactions } from '../core/db.js';
 import { appendBrain } from '../core/filesystem.js';
 import { AGENTS } from '../core/registry.js';
+import { addAudioTranscript } from '../core/memory.js';
+import { subscribe } from '../core/bus.js';
 import axios from 'axios';
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
@@ -1158,6 +1160,25 @@ app.command('/hydra-status', async ({ ack, respond }) => {
       app.receiver.client.on('reconnecting', () => console.log('[slack-gateway] WebSocket reconnecting...'));
     } catch (e) { /* non-fatal */ }
     console.log('[slack-gateway] Bolt app running in socket mode');
+
+    // Subscribe to audio.transcribed bus events to relay into RuVector
+    // (Gateway reliably holds the RuVector lock, so this is the canonical RuVector writer)
+    subscribe('audio.transcribed', async (data) => {
+      try {
+        await addAudioTranscript({
+          source: data.source || data.filename || 'plaud',
+          timestamp: data.timestamp,
+          filename: data.filename,
+          transcript: data.transcript,
+          summary: data.summary,
+          duration_s: data.duration_s || 0,
+          tags: Array.isArray(data.tags) ? data.tags : []
+        });
+        console.log(`[slack-gateway] ✅ RuVector relay: ${data.id || data.filename}`);
+      } catch (e) {
+        console.error('[slack-gateway] RuVector relay failed:', e.message);
+      }
+    }).catch(err => console.warn('[slack-gateway] audio.transcribed subscribe failed:', err.message));
 
     // Join all agent channels so app.message() fires for plain (non-mention) messages.
     // Without channel membership, Slack only delivers app_mention events, not message events.

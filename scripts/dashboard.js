@@ -671,6 +671,21 @@ ${transcript}
       });
       
       console.log(`[dashboard] 💾 Ingested to LanceDB: ${externalId}`);
+
+      // Publish to bus so RuVector-holding processes (gateway) can dual-write to their store
+      try {
+        const { publishBus } = await import('../core/bus.js');
+        await publishBus('audio.transcribed', {
+          id: externalId,
+          source,
+          timestamp: startTime,
+          filename,
+          transcript,
+          summary,
+          duration_s: Math.ceil(duration / 1000) || 0,
+          tags: Array.isArray(keywords) ? keywords : []
+        }).catch(() => {});
+      } catch (_) { /* bus optional */ }
     } catch (e) {
       console.error(`[dashboard] Failed to ingest to LanceDB: ${e.message}`);
       return res.status(500).json({ error: `LanceDB ingest failed: ${e.message}` });
