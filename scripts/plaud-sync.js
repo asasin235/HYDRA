@@ -62,7 +62,9 @@ const SYNC_STATE_KEY = 'plaud_processed_ids';
 function loadProcessedIds() {
     try {
         const data = getState('plaud-sync', SYNC_STATE_KEY);
-        return data ? new Set(JSON.parse(data)) : new Set();
+        if (!data) return new Set();
+        // getState() already JSON-parses the stored value, so data may already be an array
+        return new Set(Array.isArray(data) ? data : JSON.parse(data));
     } catch (e) {
         log.warn('Failed to load sync state:', e.message);
         return new Set();
@@ -71,7 +73,8 @@ function loadProcessedIds() {
 
 function saveProcessedIds(ids) {
     try {
-        setState('plaud-sync', SYNC_STATE_KEY, JSON.stringify([...ids]));
+        // Pass array directly — setState handles JSON encoding
+        setState('plaud-sync', SYNC_STATE_KEY, [...ids]);
     } catch (e) {
         log.error('Failed to save sync state:', e.message);
     }
