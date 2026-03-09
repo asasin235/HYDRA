@@ -806,6 +806,60 @@ GOOGLE_DRIVE_FOLDER_ID=your-folder-id
 
 ## 📋 Changelog
 
+### 2026-03-08 — Plaud Audio Pipeline Refactor: Correct API Integration & HTTP Ingest Endpoint
+
+**Plaud Sync Improvement**
+
+- **`scripts/plaud-sync.js` refactored** with correct API layer from plaud-pipesync:
+  - Fixed critical bug: replaced broken `/file/download/{id}` endpoint (invalid) with **two-step download** (temp-URL → S3 signed URL)
+  - Added full pagination support (50-item pages) — previous version silently missed recordings beyond first page
+  - Browser-mirrored auth headers: `app-platform: web`, `edit-from: web`, `origin: https://web.plaud.ai`
+  - In-memory audio conversion via `fluent-ffmpeg` (16kHz mono PCM WAV) — **zero disk I/O**
+  - Switched dedup from JSON file to SQLite `sync_state` table — crash-safe, persists across restarts
+  - **POSTs audio + metadata to dashboard's `/api/ingest/audio` endpoint** (transcription now owned by dashboard)
+  - Publishes `hydra:audio.ingested` bus event after successful ingest
+  - Subscribes to `hydra:plaud.sync.trigger` for on-demand re-sync via dashboard
+
+**New Dashboard Endpoints**
+
+- `POST /api/ingest/audio` — multipart endpoint for transcription + LanceDB ingest
+  - Receives WAV buffer + rich Plaud metadata (scene, serialNumber, hasTranscript, hasSummary, externalId)
+  - Transcribes (placeholder for whisper-cpp → Groq → OpenAI chain)
+  - Writes Markdown summary to `shared_context/audio/YYYY-MM-DD.md`
+  - Calls `addAudioTranscript()` from `core/memory.js`
+  - Serializes rich metadata into tags JSON
+  - Requires `x-api-key` header for auth
+- `GET /plaud/files` — lists all non-trash Plaud recordings with full pagination
+- `GET /plaud/sync/status` — returns processed file IDs from SQLite `sync_state`
+- `POST /plaud/sync` — triggers on-demand sync via bus event (fire-and-forget)
+- `DELETE /plaud/sync/state` — clears processed IDs for full re-sync
+
+**Environment Variables (Updated)**
+
+- `HYDRA_API_KEY` — now **required** (added to `CORE_REQUIRED` in `core/validate-env.js`)
+  - Generate: `openssl rand -base64 32`
+  - Used for `/api/ingest/audio` auth and `/plaud/*` endpoint auth
+- `HYDRA_URL` — defaults to `http://localhost:3080`
+- `PLAUD_API_DOMAIN` — now defaults to `https://api-apse1.plaud.ai` (Asia-Pacific endpoint)
+- Updated `sample.env` with all new variables
+
+**Rich Metadata Handling**
+
+- Plaud recordings now surface: `scene`, `editFrom`, `hasTranscript`, `hasSummary`, `serialNumber`, `keywords`
+- Serialized into `tags` JSON field of `audio_transcripts` LanceDB table
+- Enables future filtering/querying by Plaud metadata
+
+**Dependencies**
+
+- `fluent-ffmpeg@^2.1.3` already in package.json — used for in-memory audio conversion
+- `busboy` — used for multipart form parsing in `/api/ingest/audio` endpoint
+
+**Known Limitations / TODOs**
+
+- Transcription chain in `/api/ingest/audio` is currently a placeholder — whisper-cpp/Groq/OpenAI fallback to be implemented
+- Summary generation in `/api/ingest/audio` is a placeholder — OpenRouter summarization to be implemented
+- Audio tagging logic (agent routing) not yet implemented in dashboard endpoint
+
 ### 2026-03-01 — Observability Stack, CareerBot, Redis Bus, Health Server, Hermes Gateway, AI Copilot Instructions
 
 **New Agents**

@@ -8,6 +8,7 @@ import path from 'path';
 import os from 'os';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
+import axios from 'axios';
 
 const DOWNLOADS_DIR = process.env.HEALTH_CSV_SOURCE ||
   path.join(os.homedir(), 'Downloads');
@@ -192,5 +193,60 @@ setTimeout(function scheduleDaily() {
   syncHealthData();
   setInterval(syncHealthData, 24 * 60 * 60 * 1000);
 }, msUntilNext545AM());
+
+// ── Screenpipe staleness watchdog ────────────────────────────────────────────
+// Every 15 min during waking hours (7am–midnight), check that today's screen
+// context file on the Mac Mini has been updated within the last 45 minutes.
+// Alert #hydra-alerts via Slack if it's stale (laptop sync may have died).
+
+const SCREEN_DIR_WATCH = path.join(
+  (process.env.BRAIN_PATH || '~/hydra-brain').replace(/^~/, os.homedir()),
+  'shared_context', 'screen'
+);
+const STALE_THRESHOLD_MS = 45 * 60 * 1000; // 45 minutes
+const WATCH_INTERVAL_MS  = 15 * 60 * 1000; // 15 minutes
+let lastAlertSentAt = 0;
+
+async function checkScreenpipeStaleness() {
+  const hour = new Date().getHours();
+  if (hour < 7 || hour >= 24) return; // only during waking hours
+
+  const today = new Date().toISOString().split('T')[0];
+  const todayFile = path.join(SCREEN_DIR_WATCH, `${today}.md`);
+
+  try {
+    const stat = await fs.stat(todayFile);
+    const ageMs = Date.now() - stat.mtimeMs;
+
+    if (ageMs > STALE_THRESHOLD_MS) {
+      // Debounce: don't alert more than once per hour
+      if (Date.now() - lastAlertSentAt < 60 * 60 * 1000) return;
+
+      const ageMin = Math.round(ageMs / 60000);
+      const token   = process.env.SLACK_BOT_TOKEN;
+      const channel = process.env.HYDRA_ALERTS_CHANNEL || '#hydra-alerts';
+
+      if (token) {
+        await axios.post('https://slack.com/api/chat.postMessage',
+          { channel, text: `:warning: *Screenpipe sync may be stale* — \`${today}.md\` last updated ${ageMin} min ago. Check \`hydra-screenpipe-sync\` on the MacBook Pro.` },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        lastAlertSentAt = Date.now();
+        console.log(`[health-sync] Screenpipe staleness alert sent (file age: ${ageMin}min)`);
+      } else {
+        console.warn(`[health-sync] Screenpipe stale (${ageMin}min) but SLACK_BOT_TOKEN not set — skipping alert`);
+      }
+    }
+  } catch (e) {
+    // File doesn't exist yet — only warn if it's past 9am (expected to have data by then)
+    if (new Date().getHours() >= 9 && e.code === 'ENOENT') {
+      console.warn(`[health-sync] Screenpipe watchdog: ${today}.md not found at ${SCREEN_DIR_WATCH}`);
+    }
+  }
+}
+
+setInterval(checkScreenpipeStaleness, WATCH_INTERVAL_MS);
+checkScreenpipeStaleness(); // run immediately at startup
+// ─────────────────────────────────────────────────────────────────────────────
 
 console.log('[health-sync] Started. Next sync at 5:45AM.');

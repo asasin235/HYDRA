@@ -14,7 +14,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { addScreenActivity } from '../core/memory.js';
 
-const BRAIN_PATH = (process.env.BRAIN_PATH || '~/Desktop/hydra-mind').replace(/^~/, process.env.HOME);
+const BRAIN_PATH = (process.env.BRAIN_PATH || '~/hydra-brain').replace(/^~/, process.env.HOME);
 const SCREEN_DIR = path.join(BRAIN_PATH, 'shared_context', 'screen');
 const CURSOR_FILE = path.join(BRAIN_PATH, 'shared_context', 'screen', '.lancedb-cursor.json');
 const INTERVAL_MS = 5 * 60 * 1000;

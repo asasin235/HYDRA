@@ -488,6 +488,254 @@ app.post('/api/memory/ingest', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Plaud Audio Ingest Endpoint ──────────────────────────────────────────────
+// POST /api/ingest/audio — receives multipart audio WAV buffer + metadata JSON
+// Transcribes via whisper, writes to shared_context, ingests to LanceDB
+app.post('/api/ingest/audio', async (req, res) => {
+  try {
+    // Validate API key
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey || apiKey !== process.env.HYDRA_API_KEY) {
+      return res.status(401).json({ error: 'Invalid or missing x-api-key' });
+    }
+
+    // Parse multipart form data using busboy
+    const Busboy = (await import('busboy')).default;
+    const busboy = Busboy({ headers: req.headers });
+    
+    let audioBuffer = null;
+    let metadata = {};
+    let audioFieldName = null;
+
+    busboy.on('file', (fieldname, file, info) => {
+      if (fieldname === 'audio') {
+        audioFieldName = fieldname;
+        const chunks = [];
+        file.on('data', chunk => chunks.push(chunk));
+        file.on('end', () => {
+          audioBuffer = Buffer.concat(chunks);
+        });
+      } else {
+        file.resume();
+      }
+    });
+
+    busboy.on('field', (fieldname, val) => {
+      if (fieldname === 'metadata') {
+        try {
+          metadata = JSON.parse(val);
+        } catch (e) {
+          console.warn('[dashboard] Failed to parse metadata JSON:', e.message);
+        }
+      }
+    });
+
+    await new Promise((resolve, reject) => {
+      busboy.on('close', resolve);
+      busboy.on('error', reject);
+      req.pipe(busboy);
+    });
+
+    if (!audioBuffer) {
+      return res.status(400).json({ error: 'No audio file provided' });
+    }
+
+    const { source, externalId, filename, fullname, duration, startTime, endTime, filesize, scene, editFrom, hasTranscript, hasSummary, serialNumber, keywords } = metadata;
+
+    // Log ingest
+    console.log(`[dashboard] 📥 Ingesting audio: ${fullname || filename} (${audioBuffer.length} bytes)`);
+
+    // TODO: Transcribe audio (whisper-cpp → Groq → OpenAI fallback)
+    // For now, placeholder - actual transcription logic to be implemented
+    let transcript = `[PLACEHOLDER TRANSCRIPT]\nAudio ingested: ${fullname || filename}\nDuration: ${duration}s`;
+
+    // TODO: Summarize transcript (OpenRouter)
+    // For now, placeholder
+    let summary = `Recorded: ${new Date(startTime).toLocaleString()}\n\n${transcript.substring(0, 200)}...`;
+
+    // Write to shared_context/audio/YYYY-MM-DD.md
+    try {
+      const audiosDir = path.join(BRAIN_PATH, 'shared_context', 'audio');
+      await fs.ensureDir(audiosDir);
+      const dateStr = new Date(startTime).toISOString().split('T')[0];
+      const mdPath = path.join(audiosDir, `${dateStr}.md`);
+      
+      const markdown = `---
+source: ${source}
+externalId: ${externalId}
+filename: ${filename}
+fullname: ${fullname}
+duration: ${duration}
+startTime: ${startTime}
+endTime: ${endTime}
+filesize: ${filesize}
+scene: ${scene || 'unknown'}
+editFrom: ${editFrom || 'unknown'}
+hasTranscript: ${hasTranscript}
+hasSummary: ${hasSummary}
+serialNumber: ${serialNumber || 'N/A'}
+keywords: ${JSON.stringify(keywords || [])}
+---
+
+## ${fullname || filename}
+
+### Summary
+${summary}
+
+### Transcript
+${transcript}
+`;
+
+      let existingContent = '';
+      if (await fs.pathExists(mdPath)) {
+        existingContent = await fs.readFile(mdPath, 'utf-8');
+      }
+      
+      await fs.writeFile(mdPath, existingContent + '\n\n' + markdown, 'utf-8');
+      console.log(`[dashboard] 📝 Wrote to shared_context: ${dateStr}.md`);
+    } catch (e) {
+      console.warn(`[dashboard] Failed to write shared_context: ${e.message}`);
+    }
+
+    // Ingest to LanceDB
+    try {
+      const mem = await import('../core/memory.js');
+      const plaudMetadata = {
+        scene,
+        editFrom,
+        hasTranscript,
+        hasSummary,
+        serialNumber,
+        keywords
+      };
+      
+      await mem.addAudioTranscript({
+        source,
+        timestamp: startTime,
+        filename,
+        transcript,
+        summary,
+        duration_s: Math.ceil(duration / 1000) || 0,
+        tags: JSON.stringify(plaudMetadata)
+      });
+      
+      console.log(`[dashboard] 💾 Ingested to LanceDB: ${externalId}`);
+    } catch (e) {
+      console.error(`[dashboard] Failed to ingest to LanceDB: ${e.message}`);
+      return res.status(500).json({ error: `LanceDB ingest failed: ${e.message}` });
+    }
+
+    res.json({
+      ok: true,
+      transcriptId: externalId,
+      filename,
+      duration
+    });
+  } catch (e) {
+    console.error(`[dashboard] /api/ingest/audio error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Plaud Status & Control Routes ────────────────────────────────────────────
+
+app.get('/plaud/files', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'] || process.env.HYDRA_API_KEY;
+    if (apiKey !== process.env.HYDRA_API_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const PLAUD_TOKEN = process.env.PLAUD_TOKEN;
+    const PLAUD_API_DOMAIN = process.env.PLAUD_API_DOMAIN || 'https://api-apse1.plaud.ai';
+
+    if (!PLAUD_TOKEN || !PLAUD_API_DOMAIN) {
+      return res.status(400).json({ error: 'PLAUD_TOKEN or PLAUD_API_DOMAIN not configured' });
+    }
+
+    // Fetch from Plaud API with pagination
+    const axios = (await import('axios')).default;
+    const allFiles = [];
+    const headers = {
+      'Authorization': PLAUD_TOKEN.startsWith('bearer ') ? PLAUD_TOKEN : `bearer ${PLAUD_TOKEN}`,
+      'app-platform': 'web',
+      'edit-from': 'web',
+      'origin': 'https://web.plaud.ai'
+    };
+    
+    let skip = 0;
+    const limit = 50;
+    
+    while (true) {
+      const url = `${PLAUD_API_DOMAIN.replace(/\/$/, '')}/file/simple/web?skip=${skip}&limit=${limit}&is_trash=0`;
+      const plaudRes = await axios.get(url, { headers, timeout: 30000 });
+      const files = plaudRes.data?.data_file_list || [];
+      
+      if (files.length === 0) break;
+      allFiles.push(...files);
+      if (files.length < limit) break;
+      skip += limit;
+    }
+
+    res.json({ total: allFiles.length, files: allFiles });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/plaud/sync/status', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'] || process.env.HYDRA_API_KEY;
+    if (apiKey !== process.env.HYDRA_API_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { getState } = await import('../core/db.js');
+    const processedIdsJson = getState('plaud_processed_ids');
+    const processedIds = processedIdsJson ? JSON.parse(processedIdsJson) : [];
+
+    res.json({
+      processedCount: processedIds.length,
+      ids: processedIds
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/plaud/sync', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'] || process.env.HYDRA_API_KEY;
+    if (apiKey !== process.env.HYDRA_API_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Publish trigger event on the bus (plaud-sync.js will pick it up)
+    const { publishBus } = await import('../core/bus.js');
+    await publishBus('plaud.sync.trigger', { manual: true }).catch(() => {});
+
+    res.json({ ok: true, message: 'Sync triggered' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/plaud/sync/state', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'] || process.env.HYDRA_API_KEY;
+    if (apiKey !== process.env.HYDRA_API_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { setState } = await import('../core/db.js');
+    setState('plaud_processed_ids', JSON.stringify([]));
+
+    res.json({ ok: true, message: 'Sync state cleared' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 
 app.get('/api/integrations', async (req, res) => {
   const status = {};

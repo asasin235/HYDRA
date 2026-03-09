@@ -23,7 +23,7 @@ module.exports = {
     script('ingest-audio', './scripts/ingest-audio.js'),
     script('plaud-sync', './scripts/plaud-sync.js'),
     script('sms-reader', './scripts/sms-reader.js'),
-    script('screenpipe-sync', './scripts/screenpipe-sync.js'),
+    // screenpipe-sync removed — ingest-context is the single canonical ingestor
     script('ingest-context', './scripts/ingest-context.js'),
     script('dashboard', './scripts/dashboard.js'),
     {
@@ -84,6 +84,7 @@ function app(name) {
       NEW_RELIC_APP_NAME: `HYDRA/${name}`,
       NEW_RELIC_LICENSE_KEY: process.env.NEW_RELIC_LICENSE_KEY || '',
       LANCEDB_LOG: process.env.LANCEDB_LOG || 'debug',
+      BRAIN_PATH: process.env.BRAIN_PATH || '~/hydra-brain',
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,
@@ -107,6 +108,7 @@ function script(name, scriptPath) {
       NEW_RELIC_APP_NAME: `HYDRA/${name}`,
       NEW_RELIC_LICENSE_KEY: process.env.NEW_RELIC_LICENSE_KEY || '',
       LANCEDB_LOG: process.env.LANCEDB_LOG || 'debug',
+      BRAIN_PATH: process.env.BRAIN_PATH || '~/hydra-brain',
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,

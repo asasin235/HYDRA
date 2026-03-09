@@ -10,6 +10,7 @@
 const CORE_REQUIRED = [
   'OPENROUTER_API_KEY',
   'BRAIN_PATH',
+  'HYDRA_API_KEY',
 ];
 
 /** Variables required by the Slack gateway (and any agent that posts to Slack) */
