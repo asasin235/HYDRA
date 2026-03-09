@@ -58,26 +58,36 @@ export async function initRuVector() {
   if (_initPromise) return _initPromise;
 
   _initPromise = (async () => {
-    try {
-      const { VectorDB } = await import('ruvector');
-      await fs.ensureDir(path.dirname(RUVECTOR_STORAGE_PATH));
+    const { VectorDB } = await import('ruvector');
+    await fs.ensureDir(path.dirname(RUVECTOR_STORAGE_PATH));
 
-      ruvectorDb = new VectorDB({
-        dimensions: EMBEDDING_DIM,
-        storagePath: RUVECTOR_STORAGE_PATH,
-        distanceMetric: 'Cosine'
-      });
-
-      _available = true;
-      console.log('[ruvector] Initialized at', RUVECTOR_STORAGE_PATH);
-      return ruvectorDb;
-    } catch (err) {
-      console.error('[ruvector] Init failed (HYDRA will continue with LanceDB only):', err.message);
-      _available = false;
-      ruvectorDb = null;
-      _initPromise = null; // allow retry on next call
-      return null;
+    // Retry up to 5x with backoff — cross-process lock may clear quickly
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        ruvectorDb = new VectorDB({
+          dimensions: EMBEDDING_DIM,
+          storagePath: RUVECTOR_STORAGE_PATH,
+          distanceMetric: 'Cosine'
+        });
+        _available = true;
+        console.log('[ruvector] Initialized at', RUVECTOR_STORAGE_PATH);
+        return ruvectorDb;
+      } catch (err) {
+        const isLock = err.message.includes('lock') || err.message.includes('already open');
+        if (isLock && attempt < 5) {
+          const delay = attempt * 2000; // 2s, 4s, 6s, 8s
+          console.warn(`[ruvector] Lock conflict (attempt ${attempt}/5), retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          console.warn('[ruvector] Init failed (continuing with LanceDB only):', err.message);
+          _available = false;
+          ruvectorDb = null;
+          _initPromise = null;
+          return null;
+        }
+      }
     }
+    return null;
   })();
 
   return _initPromise;

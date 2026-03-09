@@ -233,6 +233,9 @@ app.get('/logout', (req, res) => {
 // Auth middleware
 app.use((req, res, next) => {
   if (req.path === '/login' || req.path === '/manifest.json') return next();
+  // Allow machine-to-machine API calls with valid API key
+  const apiKey = req.headers['x-api-key'];
+  if (apiKey && apiKey === process.env.HYDRA_API_KEY) return next();
   if (!isAuthenticated(req)) return res.redirect('/login');
   next();
 });
@@ -493,12 +496,6 @@ app.post('/api/memory/ingest', async (req, res) => {
 // Transcribes via whisper, writes to shared_context, ingests to LanceDB
 app.post('/api/ingest/audio', async (req, res) => {
   try {
-    // Validate API key
-    const apiKey = req.headers['x-api-key'];
-    if (!apiKey || apiKey !== process.env.HYDRA_API_KEY) {
-      return res.status(401).json({ error: 'Invalid or missing x-api-key' });
-    }
-
     // Parse multipart form data using busboy
     const Busboy = (await import('busboy')).default;
     const busboy = Busboy({ headers: req.headers });
@@ -670,7 +667,7 @@ ${transcript}
         transcript,
         summary,
         duration_s: Math.ceil(duration / 1000) || 0,
-        tags: JSON.stringify(plaudMetadata)
+        tags: Array.isArray(keywords) ? keywords : (keywords ? [String(keywords)] : [])
       });
       
       console.log(`[dashboard] 💾 Ingested to LanceDB: ${externalId}`);
