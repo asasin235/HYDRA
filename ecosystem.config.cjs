@@ -123,6 +123,8 @@ function script(name, scriptPath) {
       PLAUD_TOKEN: process.env.PLAUD_TOKEN || '',
       PLAUD_API_DOMAIN: process.env.PLAUD_API_DOMAIN || '',
       PLAUD_API_KEY: process.env.PLAUD_API_KEY || '',
+      PLAUD_DEVICE_ID: process.env.PLAUD_DEVICE_ID || '',
+      PLAUD_USER_HASH: process.env.PLAUD_USER_HASH || '',
     },
     error_file: `./logs/${name}.log`,
     out_file: `./logs/${name}.log`,

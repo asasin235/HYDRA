@@ -39,6 +39,8 @@ const log = createLogger('plaud-sync');
 const PLAUD_TOKEN = process.env.PLAUD_TOKEN;
 const PLAUD_API_DOMAIN = process.env.PLAUD_API_DOMAIN || 'https://api-apse1.plaud.ai';
 const PLAUD_API_KEY = process.env.PLAUD_API_KEY; // legacy fallback
+const PLAUD_DEVICE_ID = process.env.PLAUD_DEVICE_ID || '5757c37e2b1f511c';
+const PLAUD_USER_HASH = process.env.PLAUD_USER_HASH || '';
 
 const HYDRA_URL = process.env.HYDRA_URL || 'http://localhost:3080';
 const HYDRA_API_KEY = process.env.HYDRA_API_KEY;
@@ -80,13 +82,23 @@ function saveProcessedIds(ids) {
 function plaudHeaders() {
     if (PLAUD_TOKEN) {
         const auth = PLAUD_TOKEN.startsWith('bearer ') ? PLAUD_TOKEN : `bearer ${PLAUD_TOKEN}`;
+        const reqId = Math.random().toString(36).slice(2, 14);
         return {
             'Authorization': auth,
             'Content-Type': 'application/json',
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+            'app-language': 'en',
             'app-platform': 'web',
             'edit-from': 'web',
             'origin': 'https://web.plaud.ai',
-            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'
+            'referer': 'https://web.plaud.ai/',
+            'timezone': 'Asia/Calcutta',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+            'x-device-id': PLAUD_DEVICE_ID,
+            'x-pld-tag': PLAUD_DEVICE_ID,
+            ...(PLAUD_USER_HASH && { 'x-pld-user': PLAUD_USER_HASH }),
+            'x-request-id': reqId
         };
     }
     if (PLAUD_API_KEY) {
@@ -158,13 +170,18 @@ async function downloadPlaudAudioBuffer(fileId) {
             throw new Error('No download URL in Plaud response');
         }
 
+        // Detect format from URL path (before query string)
+        const urlPath = s3Url.split('?')[0];
+        const ext = urlPath.split('.').pop().toLowerCase();
+        const audioFormat = ['ogg', 'opus', 'mp3', 'mp4', 'aac', 'flac', 'm4a'].includes(ext) ? ext : 'mp3';
+
         // Step 2: Download from S3 (no auth needed)
         const audioRes = await axios.get(s3Url, {
             responseType: 'arraybuffer',
             timeout: 120000 // 2 min for large files
         });
 
-        return Buffer.from(audioRes.data);
+        return { buffer: Buffer.from(audioRes.data), format: audioFormat };
     } catch (err) {
         log.error(`Download failed for file ${fileId}:`, err.message);
         throw err;
@@ -247,11 +264,11 @@ async function processPlaudRecording(recording, processedIds) {
 
     try {
         // 1. Download audio from Plaud via S3
-        const audioBuffer = await downloadPlaudAudioBuffer(fileId);
-        log.debug(`⬇️  Downloaded ${audioBuffer.length} bytes`);
+        const { buffer: audioBuffer, format: audioFormat } = await downloadPlaudAudioBuffer(fileId);
+        log.debug(`⬇️  Downloaded ${audioBuffer.length} bytes (format: ${audioFormat})`);
 
         // 2. Convert to WAV in-memory
-        const wavBuffer = await convertToWavBuffer(audioBuffer, 'mp3');
+        const wavBuffer = await convertToWavBuffer(audioBuffer, audioFormat);
         log.debug(`🔄 Converted to WAV: ${wavBuffer.length} bytes`);
 
         // 3. Build rich metadata from Plaud fields
