@@ -8,7 +8,7 @@ import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { getDebt, getState, setState, getTransactions, getDailySpend, getSpendByCategory, getRecentTransactions } from '../core/db.js';
 import { appendBrain } from '../core/filesystem.js';
 import { AGENTS } from '../core/registry.js';
-import { addAudioTranscript } from '../core/memory.js';
+import { addAudioTranscript, initRuVectorEager } from '../core/memory.js';
 import { subscribe } from '../core/bus.js';
 import axios from 'axios';
 
@@ -1160,6 +1160,10 @@ app.command('/hydra-status', async ({ ack, respond }) => {
       app.receiver.client.on('reconnecting', () => console.log('[slack-gateway] WebSocket reconnecting...'));
     } catch (e) { /* non-fatal */ }
     console.log('[slack-gateway] Bolt app running in socket mode');
+
+    // Eagerly acquire the RuVector lock so gateway is the canonical writer.
+    // This must happen before dashboard or agents try to open the same exclusive DB.
+    initRuVectorEager().catch(() => {});
 
     // Subscribe to audio.transcribed bus events to relay into RuVector
     // (Gateway reliably holds the RuVector lock, so this is the canonical RuVector writer)

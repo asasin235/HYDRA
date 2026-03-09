@@ -91,6 +91,17 @@ async function ensureRuVector() {
 }
 
 /**
+ * Eagerly initialize RuVector at process startup.
+ * Call this in the gateway (which should exclusively hold the RuVector lock)
+ * so it wins the startup race before other processes try to open the DB.
+ */
+export async function initRuVectorEager() {
+  if (!RUV_ENABLE) return;
+  await ensureRuVector();
+  console.log('[memory] RuVector eager init:', ruv?.isAvailable() ? 'acquired lock ✅' : 'unavailable (lock held elsewhere)');
+}
+
+/**
  * Fire-and-forget dual-write to RuVector. Never blocks or throws.
  */
 function dualWrite(tableName, record) {
