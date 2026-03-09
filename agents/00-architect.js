@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
-import { getLogs, getDebt, setState } from '../core/db.js';
+import { getLogs, getDebt, setState, listRecordingBriefs, listActionItems, getProjectSummary } from '../core/db.js';
 import { readBrain } from '../core/filesystem.js';
 import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
 import { AGENT_NAMES, AGENT_NAMESPACES } from '../core/registry.js';
@@ -96,6 +96,35 @@ async function buildMorningBrief() {
       console.error('[00-architect] context/pulse read error:', e.message);
     }
 
+    // Pull recording intelligence from triage pipeline
+    let recordingCtx = '';
+    try {
+      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' ');
+      const recentBriefs = listRecordingBriefs({ since: yesterday, limit: 20 });
+      const meaningful = recentBriefs.filter(b => b.one_line && !b.one_line.includes('unintelligible') && !b.one_line.includes('noise'));
+      if (meaningful.length) {
+        recordingCtx = meaningful.map(b => {
+          const actions = (typeof b.action_items_json === 'string' ? JSON.parse(b.action_items_json) : b.action_items_json) || [];
+          const actStr = actions.length ? actions.map(a => `  → ${typeof a === 'string' ? a : a.task}`).join('\n') : '';
+          return `• [${b.project}/${b.meeting_type}] ${b.one_line}${actStr ? '\n' + actStr : ''}`;
+        }).join('\n');
+      }
+      const openActions = listActionItems({ status: 'open', limit: 15 });
+      if (openActions.length) {
+        recordingCtx += '\n\nOpen Action Items:\n' + openActions.map(a =>
+          `• [${a.project}] ${a.task}${a.owner ? ' (@' + a.owner + ')' : ''}${a.due_date ? ' due ' + a.due_date : ''}`
+        ).join('\n');
+      }
+      const projSummary = getProjectSummary();
+      if (projSummary.length) {
+        recordingCtx += '\n\nProject Activity Summary:\n' + projSummary.map(p =>
+          `• ${p.project}: ${p.recording_count} recordings, ${p.open_actions} open actions`
+        ).join('\n');
+      }
+    } catch (e) {
+      console.error('[00-architect] recording context error:', e.message);
+    }
+
     const context = [
       `Budget month ${spend.month}: total=$${spend.total.toFixed(2)}, remaining=$${spend.remaining.toFixed(2)}`,
       `Debt tracker: debt=$${(debt?.debt || 0).toFixed(2)} paid=$${(debt?.paid || 0).toFixed(2)} wedding=$${(debt?.wedding_fund || 0).toFixed(2)}`,
@@ -104,7 +133,8 @@ async function buildMorningBrief() {
       screenCtx ? `\nRecent Screen Activity:\n${screenCtx.slice(0, 2000)}` : '',
       audioCtx ? `\nRecent Call/Audio Notes:\n${audioCtx.slice(0, 2000)}` : '',
       notesCtx ? `\nAgent Notes:\n${notesCtx.slice(0, 1000)}` : '',
-      socialPulse ? `\nSocial Pulse (Unread/Recent messages):\n${socialPulse.slice(0, 1000)}` : ''
+      socialPulse ? `\nSocial Pulse (Unread/Recent messages):\n${socialPulse.slice(0, 1000)}` : '',
+      recordingCtx ? `\nRecording Intelligence (last 24h):\n${recordingCtx.slice(0, 3000)}` : ''
     ].filter(Boolean).join('\n');
 
     const msg = await architect.run('Produce today\'s morning briefing for HYDRA. Include insights from screen activity, call recordings, agent notes, and social pulse if available.', context);
