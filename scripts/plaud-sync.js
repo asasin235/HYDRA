@@ -27,7 +27,8 @@ import path from 'path';
 import { PassThrough } from 'stream';
 import ffmpeg from 'fluent-ffmpeg';
 import axios from 'axios';
-import { publishBus, subscribeBus } from '../core/bus.js';
+import FormData from 'form-data';
+import { publish, subscribe } from '../core/bus.js';
 import { getState, setState } from '../core/db.js';
 import { createLogger } from '../core/logger.js';
 
@@ -58,7 +59,7 @@ const SYNC_STATE_KEY = 'plaud_processed_ids';
 
 function loadProcessedIds() {
     try {
-        const data = getState(SYNC_STATE_KEY);
+        const data = getState('plaud-sync', SYNC_STATE_KEY);
         return data ? new Set(JSON.parse(data)) : new Set();
     } catch (e) {
         log.warn('Failed to load sync state:', e.message);
@@ -68,7 +69,7 @@ function loadProcessedIds() {
 
 function saveProcessedIds(ids) {
     try {
-        setState(SYNC_STATE_KEY, JSON.stringify([...ids]));
+        setState('plaud-sync', SYNC_STATE_KEY, JSON.stringify([...ids]));
     } catch (e) {
         log.error('Failed to save sync state:', e.message);
     }
@@ -210,14 +211,14 @@ async function convertToWavBuffer(inputBuffer, inputFormat = 'mp3') {
  */
 async function ingestAudioToDashboard(wavBuffer, metadata) {
     const formData = new FormData();
-    formData.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
+    formData.append('audio', wavBuffer, { filename: 'audio.wav', contentType: 'audio/wav' });
     formData.append('metadata', JSON.stringify(metadata));
 
     try {
         const res = await axios.post(`${HYDRA_URL}/api/ingest/audio`, formData, {
             headers: {
                 'x-api-key': HYDRA_API_KEY || '',
-                ...formData.getHeaders?.() // multipart boundary
+                ...formData.getHeaders() // multipart boundary
             },
             timeout: 180000 // 3 min for full transcription chain
         });
@@ -277,7 +278,7 @@ async function processPlaudRecording(recording, processedIds) {
         log.info(`✅ Ingested: ${ingestResult.transcriptId || 'ok'}`);
 
         // 5. Publish bus event for agents
-        await publishBus('audio.ingested', {
+        await publish('audio.ingested', {
             source: 'plaud',
             externalId: fileId,
             filename,
@@ -339,7 +340,7 @@ async function processLocalFile(filePath, processedIds) {
         log.info(`✅ Ingested: ${ingestResult.transcriptId || 'ok'}`);
 
         // 6. Publish bus event
-        await publishBus('audio.ingested', {
+        await publish('audio.ingested', {
             source: 'local',
             externalId: fileId,
             filename: fileName,
@@ -443,7 +444,7 @@ if (process.argv.includes('--test')) {
     setInterval(watchAudioInbox, WATCH_INTERVAL);
 
     // Subscribe to on-demand trigger
-    subscribeBus('plaud.sync.trigger', () => {
+    subscribe('plaud.sync.trigger', () => {
         log.info('📍 Sync triggered via bus event');
         watchAudioInbox();
     });
@@ -453,7 +454,7 @@ if (process.argv.includes('--test')) {
     setInterval(syncAll, POLL_INTERVAL);
 
     // Subscribe to on-demand trigger
-    subscribeBus('plaud.sync.trigger', () => {
+    subscribe('plaud.sync.trigger', () => {
         log.info('📍 Sync triggered via bus event');
         syncAll();
     });
