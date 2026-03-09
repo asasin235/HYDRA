@@ -545,13 +545,67 @@ app.post('/api/ingest/audio', async (req, res) => {
     // Log ingest
     console.log(`[dashboard] 📥 Ingesting audio: ${fullname || filename} (${audioBuffer.length} bytes)`);
 
-    // TODO: Transcribe audio (whisper-cpp → Groq → OpenAI fallback)
-    // For now, placeholder - actual transcription logic to be implemented
-    let transcript = `[PLACEHOLDER TRANSCRIPT]\nAudio ingested: ${fullname || filename}\nDuration: ${duration}s`;
+    // Transcribe audio via whisper-cli
+    let transcript = '';
+    const tmpWavPath = `/tmp/plaud-${Date.now()}.wav`;
+    const txtPath = tmpWavPath + '.txt';
+    try {
+      await fs.writeFile(tmpWavPath, audioBuffer);
+      const whisperBin = process.env.WHISPER_CPP_PATH || '/opt/homebrew/bin/whisper-cli';
+      const whisperModel = process.env.WHISPER_MODEL_PATH || '/Users/hydra/.local/share/whisper-cpp/models/ggml-small.bin';
+      const { execFile } = await import('child_process');
+      const { promisify } = await import('util');
+      const execFileAsync = promisify(execFile);
+      console.log(`[dashboard] 🎙️  Transcribing with whisper-cli: ${fullname || filename}`);
+      await execFileAsync(whisperBin, [
+        '-m', whisperModel,
+        '-f', tmpWavPath,
+        '--language', 'auto',
+        '--output-txt',
+        '--no-timestamps'
+      ], { timeout: 600000, maxBuffer: 50 * 1024 * 1024 });
+      if (await fs.pathExists(txtPath)) {
+        transcript = (await fs.readFile(txtPath, 'utf-8')).trim();
+        await fs.remove(txtPath);
+      }
+      if (!transcript) transcript = '[Transcription produced no output]';
+      console.log(`[dashboard] ✅ Whisper transcript: ${transcript.length} chars`);
+    } catch (whisperErr) {
+      transcript = `[Transcription failed: ${whisperErr.message.slice(0, 200)}]`;
+      console.warn(`[dashboard] ⚠️  Whisper failed: ${whisperErr.message.slice(0, 200)}`);
+    } finally {
+      await fs.remove(tmpWavPath).catch(() => {});
+      await fs.remove(txtPath).catch(() => {});
+    }
 
-    // TODO: Summarize transcript (OpenRouter)
-    // For now, placeholder
-    let summary = `Recorded: ${new Date(startTime).toLocaleString()}\n\n${transcript.substring(0, 200)}...`;
+    // Summarize transcript via OpenRouter
+    let summary = '';
+    try {
+      if (process.env.OPENROUTER_API_KEY && transcript && !transcript.startsWith('[')) {
+        const sumRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://hydra.local',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-2.5-flash-preview',
+            messages: [{
+              role: 'user',
+              content: `Summarize in 3-4 sentences covering key topics, decisions, and action items:\n\n${transcript.slice(0, 8000)}`
+            }],
+            max_tokens: 200
+          }),
+          signal: AbortSignal.timeout(30000)
+        });
+        const sumData = await sumRes.json();
+        summary = sumData.choices?.[0]?.message?.content?.trim() || '';
+      }
+    } catch (sumErr) {
+      console.warn(`[dashboard] ⚠️  Summarization failed: ${sumErr.message.slice(0, 100)}`);
+    }
+    if (!summary) summary = transcript.slice(0, 400);
 
     // Write to shared_context/audio/YYYY-MM-DD.md
     try {
