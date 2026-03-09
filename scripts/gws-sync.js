@@ -51,8 +51,9 @@ async function syncGmail(profile, agentName) {
     query += ' newer_than:1d';
   }
 
-  const emails = await triageEmails(profile, { max: 30, query });
-  if (!emails) return 0; // not authed or error
+  const result = await triageEmails(profile, { max: 30, query });
+  if (!result) return 0; // not authed or error
+  const emails = result.messages || result; // handle both {messages:[]} and raw array
 
   const seenKey = `gws-gmail-seen-${profile}`;
   let seenIds = new Set();
@@ -95,8 +96,9 @@ async function syncGmail(profile, agentName) {
 // ── Calendar sync ─────────────────────────────────────────────────────────────
 
 async function syncCalendar(profile, agentName) {
-  const events = await getAgenda(profile, { days: 2 }); // today + tomorrow
-  if (!events) return 0;
+  const result = await getAgenda(profile, { days: 2 }); // today + tomorrow
+  if (!result) return 0;
+  const events = result.events || result; // handle both {events:[]} and raw array
 
   const seenKey = `gws-cal-seen-${profile}`;
   let seenIds = new Set();

@@ -23,7 +23,7 @@ set -e
 export PATH="$HOME/Downloads/google-cloud-sdk/bin:$PATH"
 
 GWS_BIN="${GWS_BIN:-gws}"
-WORK_DIR="${GWS_WORK_CONFIG_DIR:-$HOME/.config/gws-work}"
+WORK_DIR="${GWS_WORK_CONFIG_DIR:-$HOME/.config/gws}"
 PERSONAL_DIR="${GWS_PERSONAL_CONFIG_DIR:-$HOME/.config/gws-personal}"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; RESET='\033[0m'

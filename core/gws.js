@@ -10,12 +10,14 @@
  *
  * Two named auth profiles (personal / work) use separate config directories:
  *   personal → ~/.config/gws-personal  → aatif20@gmail.com    (04-socialbot)
- *   work     → ~/.config/gws-work      → aatif.rashid@goedmo.com (01-edmobot)
+ *   work     → ~/.config/gws            → aatif.rashid@goedmo.com (01-edmobot)
+ *             (default gws config dir — populated by gws-auth-work.sh)
  *
  * All helpers return null (never throw) when auth is missing — tools and the
  * sync script check for null and surface the setup instructions to the user.
  *
- * To authenticate: ./scripts/gws-auth-setup.sh
+ * To authenticate: ./scripts/gws-auth-work.sh  (work)
+ *                  ./scripts/gws-auth-personal.sh (personal)
  */
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -34,7 +36,7 @@ export const PROFILES = {
     agent: '04-socialbot',
   },
   work: {
-    configDir: process.env.GWS_WORK_CONFIG_DIR || `${HOME}/.config/gws-work`,
+    configDir: process.env.GWS_WORK_CONFIG_DIR || `${HOME}/.config/gws`,
     email: 'aatif.rashid@goedmo.com',
     agent: '01-edmobot',
   },
