@@ -23,6 +23,7 @@ module.exports = {
     script('ingest-audio', './scripts/ingest-audio.js'),
     script('plaud-sync', './scripts/plaud-sync.js'),
     script('sms-reader', './scripts/sms-reader.js'),
+    script('gws-sync', './scripts/gws-sync.js'),
     // screenpipe-sync removed — ingest-context is the single canonical ingestor
     script('ingest-context', './scripts/ingest-context.js'),
     script('dashboard', './scripts/dashboard.js'),

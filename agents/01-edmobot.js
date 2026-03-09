@@ -26,6 +26,11 @@ import {
   isGitHubConfigured, getRepo, getFileContent, updateFile,
   createBranch, createPR, searchCode, listFiles, GITHUB_USERNAME
 } from '../core/github.js';
+import {
+  triageEmails, getEmail, sendEmail, searchEmails,
+  getAgenda, insertEvent, listSpaces, listMessages, sendChatMessage,
+  NOT_AUTHED_MSG,
+} from '../core/gws.js';
 
 validateEnv('01-edmobot');
 
@@ -288,7 +293,164 @@ const edmo = new Agent({
         required: ['summary', 'description']
       },
       execute: draftJiraIssueTool
-    }
+    },
+    // ── Google Workspace tools ─────────────────────────────────────────────────
+    {
+      name: 'check_work_email',
+      description: 'List recent unread emails from the work inbox (aatif.rashid@goedmo.com). Returns sender, subject, date, and preview.',
+      parameters: {
+        type: 'object',
+        properties: {
+          hours: { type: 'number', description: 'How many hours back to look (optional, defaults to all unread)' },
+          max: { type: 'number', description: 'Max emails to return (default: 20)' }
+        },
+        required: []
+      },
+      execute: async ({ hours, max = 20 } = {}) => {
+        const query = hours
+          ? `is:unread in:inbox newer_than:${hours}h -category:promotions -category:social`
+          : 'is:unread in:inbox -category:promotions -category:social';
+        const emails = await triageEmails('work', { max, query });
+        if (!emails) return NOT_AUTHED_MSG;
+        if (emails.length === 0) return '✉️ No unread work emails.';
+        return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}\n   ${(e.snippet || '').slice(0, 150)}`).join('\n\n');
+      }
+    },
+    {
+      name: 'search_work_email',
+      description: 'Search work Gmail (aatif.rashid@goedmo.com) with a Gmail search query.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Gmail search query, e.g. "from:boss@goedmo.com subject:sprint"' },
+          max: { type: 'number', description: 'Max results (default: 10)' }
+        },
+        required: ['query']
+      },
+      execute: async ({ query, max = 10 }) => {
+        const emails = await searchEmails('work', query, max);
+        if (!emails) return NOT_AUTHED_MSG;
+        if (emails.length === 0) return `No emails found for: "${query}"`;
+        return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}`).join('\n');
+      }
+    },
+    {
+      name: 'send_work_email',
+      description: 'Send an email from the work account (aatif.rashid@goedmo.com).',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'Recipient email address' },
+          subject: { type: 'string', description: 'Email subject' },
+          body: { type: 'string', description: 'Email body (plain text)' }
+        },
+        required: ['to', 'subject', 'body']
+      },
+      execute: async ({ to, subject, body }) => {
+        try {
+          await sendEmail('work', { to, subject, body });
+          return `✅ Email sent to ${to}: "${subject}"`;
+        } catch (err) {
+          return `❌ Failed to send: ${err.message}`;
+        }
+      }
+    },
+    {
+      name: 'check_gchat',
+      description: 'List recent Google Chat messages from work spaces.',
+      parameters: {
+        type: 'object',
+        properties: {
+          max_per_space: { type: 'number', description: 'Max messages per space (default: 10)' }
+        },
+        required: []
+      },
+      execute: async ({ max_per_space = 10 } = {}) => {
+        const spaces = await listSpaces('work');
+        if (!spaces) return NOT_AUTHED_MSG;
+        if (spaces.length === 0) return 'No Chat spaces found.';
+        const results = [];
+        for (const space of spaces.slice(0, 5)) {
+          const msgs = await listMessages('work', space.name, { pageSize: max_per_space });
+          if (!msgs || msgs.length === 0) continue;
+          results.push(`**${space.displayName || space.name}**`);
+          msgs.forEach(m => {
+            const sender = m.sender?.displayName || m.sender?.name || 'Unknown';
+            results.push(`  ${sender}: ${(m.text || '').slice(0, 200)}`);
+          });
+        }
+        return results.length ? results.join('\n') : 'No recent GChat messages.';
+      }
+    },
+    {
+      name: 'send_gchat_message',
+      description: 'Send a message to a Google Chat space.',
+      parameters: {
+        type: 'object',
+        properties: {
+          space: { type: 'string', description: 'Space name, e.g. "spaces/AAAAxxxx" (get from check_gchat)' },
+          text: { type: 'string', description: 'Message text' }
+        },
+        required: ['space', 'text']
+      },
+      execute: async ({ space, text }) => {
+        try {
+          await sendChatMessage('work', space, text);
+          return `✅ Message sent to ${space}`;
+        } catch (err) {
+          return `❌ Failed to send GChat message: ${err.message}`;
+        }
+      }
+    },
+    {
+      name: 'check_calendar',
+      description: 'List upcoming work calendar events for today and tomorrow.',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: 'Days ahead to look (default: 2)' },
+          today_only: { type: 'boolean', description: "Only show today's events" }
+        },
+        required: []
+      },
+      execute: async ({ days = 2, today_only = false } = {}) => {
+        const events = await getAgenda('work', { days, today: today_only });
+        if (!events) return NOT_AUTHED_MSG;
+        if (events.length === 0) return '📅 No upcoming work calendar events.';
+        return events.map(e => {
+          const start = e.start?.dateTime || e.start?.date || '';
+          const end = e.end?.dateTime || e.end?.date || '';
+          const attendees = Array.isArray(e.attendees)
+            ? ` | Attendees: ${e.attendees.map(a => a.email || a.displayName).slice(0, 5).join(', ')}`
+            : '';
+          return `📅 ${e.summary} | ${start} → ${end}${e.location ? ` | 📍 ${e.location}` : ''}${attendees}`;
+        }).join('\n');
+      }
+    },
+    {
+      name: 'create_calendar_event',
+      description: 'Create a new work calendar event.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'Event title' },
+          start: { type: 'string', description: 'Start time in ISO 8601 format, e.g. 2026-03-10T09:00:00+05:30' },
+          end: { type: 'string', description: 'End time in ISO 8601 format' },
+          location: { type: 'string', description: 'Event location (optional)' },
+          description: { type: 'string', description: 'Event description (optional)' },
+          attendees: { type: 'array', items: { type: 'string' }, description: 'Attendee email addresses (optional)' }
+        },
+        required: ['summary', 'start', 'end']
+      },
+      execute: async ({ summary, start, end, location, description, attendees = [] }) => {
+        try {
+          const event = await insertEvent('work', { summary, start, end, location, description, attendees });
+          return `✅ Event created: "${summary}" on ${start}${event.htmlLink ? `\n🔗 ${event.htmlLink}` : ''}`;
+        } catch (err) {
+          return `❌ Failed to create event: ${err.message}`;
+        }
+      }
+    },
   ],
   namespace: '01_EDMO',
   tokenBudget: 300000

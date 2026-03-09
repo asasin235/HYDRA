@@ -127,6 +127,11 @@ import {
   getUserProfile, getUserRepos, getContributionStats,
   createBranch, updateFile, createPR
 } from '../core/github.js';
+import {
+  triageEmails, searchEmails, sendEmail,
+  getAgenda, insertEvent, listSpaces, listMessages, sendChatMessage,
+  NOT_AUTHED_MSG as GWS_NOT_AUTHED,
+} from '../core/gws.js';
 
 const EDMOBOT_TOOLS = [
   {
@@ -240,6 +245,167 @@ const EDMOBOT_TOOLS = [
       if (!isGitHubConfigured()) return 'GitHub not configured.';
       const pr = await createPR(repo, title, body, head, base);
       return `✅ PR #${pr.number} created: ${pr.html_url}`;
+    }
+  },
+  // ── Google Workspace (work account) ─────────────────────────────────────────
+  {
+    name: 'check_work_email',
+    description: 'List recent unread emails from the work inbox (aatif.rashid@goedmo.com).',
+    parameters: { type: 'object', properties: { hours: { type: 'number' }, max: { type: 'number' } }, required: [] },
+    execute: async ({ hours, max = 20 } = {}) => {
+      const query = hours
+        ? `is:unread in:inbox newer_than:${hours}h -category:promotions -category:social`
+        : 'is:unread in:inbox -category:promotions -category:social';
+      const emails = await triageEmails('work', { max, query });
+      if (!emails) return GWS_NOT_AUTHED;
+      if (emails.length === 0) return '✉️ No unread work emails.';
+      return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}\n   ${(e.snippet || '').slice(0, 150)}`).join('\n\n');
+    }
+  },
+  {
+    name: 'search_work_email',
+    description: 'Search work Gmail with a Gmail query string.',
+    parameters: { type: 'object', properties: { query: { type: 'string' }, max: { type: 'number' } }, required: ['query'] },
+    execute: async ({ query, max = 10 }) => {
+      const emails = await searchEmails('work', query, max);
+      if (!emails) return GWS_NOT_AUTHED;
+      if (emails.length === 0) return `No emails found for: "${query}"`;
+      return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}`).join('\n');
+    }
+  },
+  {
+    name: 'send_work_email',
+    description: 'Send an email from the work account (aatif.rashid@goedmo.com).',
+    parameters: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'subject', 'body'] },
+    execute: async ({ to, subject, body }) => {
+      try { await sendEmail('work', { to, subject, body }); return `✅ Email sent to ${to}: "${subject}"`; }
+      catch (err) { return `❌ Failed to send: ${err.message}`; }
+    }
+  },
+  {
+    name: 'check_gchat',
+    description: 'List recent Google Chat messages from work spaces.',
+    parameters: { type: 'object', properties: { max_per_space: { type: 'number' } }, required: [] },
+    execute: async ({ max_per_space = 10 } = {}) => {
+      const spaces = await listSpaces('work');
+      if (!spaces) return GWS_NOT_AUTHED;
+      if (spaces.length === 0) return 'No Chat spaces found.';
+      const results = [];
+      for (const space of spaces.slice(0, 5)) {
+        const msgs = await listMessages('work', space.name, { pageSize: max_per_space });
+        if (!msgs || msgs.length === 0) continue;
+        results.push(`**${space.displayName || space.name}**`);
+        msgs.forEach(m => results.push(`  ${m.sender?.displayName || 'Unknown'}: ${(m.text || '').slice(0, 200)}`));
+      }
+      return results.length ? results.join('\n') : 'No recent GChat messages.';
+    }
+  },
+  {
+    name: 'send_gchat_message',
+    description: 'Send a message to a Google Chat space.',
+    parameters: { type: 'object', properties: { space: { type: 'string', description: 'e.g. spaces/AAAAxxxx' }, text: { type: 'string' } }, required: ['space', 'text'] },
+    execute: async ({ space, text }) => {
+      try { await sendChatMessage('work', space, text); return `✅ Message sent to ${space}`; }
+      catch (err) { return `❌ Failed: ${err.message}`; }
+    }
+  },
+  {
+    name: 'check_calendar',
+    description: 'List upcoming work calendar events.',
+    parameters: { type: 'object', properties: { days: { type: 'number' }, today_only: { type: 'boolean' } }, required: [] },
+    execute: async ({ days = 2, today_only = false } = {}) => {
+      const events = await getAgenda('work', { days, today: today_only });
+      if (!events) return GWS_NOT_AUTHED;
+      if (events.length === 0) return '📅 No upcoming work calendar events.';
+      return events.map(e => {
+        const start = e.start?.dateTime || e.start?.date || '';
+        const end = e.end?.dateTime || e.end?.date || '';
+        const attendees = Array.isArray(e.attendees) ? ` | ${e.attendees.map(a => a.email).slice(0, 5).join(', ')}` : '';
+        return `📅 ${e.summary} | ${start} → ${end}${e.location ? ` | 📍 ${e.location}` : ''}${attendees}`;
+      }).join('\n');
+    }
+  },
+  {
+    name: 'create_calendar_event',
+    description: 'Create a new work calendar event.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' }, start: { type: 'string', description: 'ISO 8601' },
+        end: { type: 'string', description: 'ISO 8601' }, location: { type: 'string' },
+        description: { type: 'string' }, attendees: { type: 'array', items: { type: 'string' } }
+      },
+      required: ['summary', 'start', 'end']
+    },
+    execute: async ({ summary, start, end, location, description, attendees = [] }) => {
+      try {
+        const event = await insertEvent('work', { summary, start, end, location, description, attendees });
+        return `✅ Event created: "${summary}" on ${start}${event.htmlLink ? `\n🔗 ${event.htmlLink}` : ''}`;
+      } catch (err) { return `❌ Failed: ${err.message}`; }
+    }
+  }
+];
+
+// Socialbot tools — personal Gmail + Calendar (aatif20@gmail.com)
+const SOCIALBOT_TOOLS = [
+  {
+    name: 'check_personal_email',
+    description: 'List recent unread personal emails (aatif20@gmail.com).',
+    parameters: { type: 'object', properties: { max: { type: 'number' }, hours: { type: 'number' } }, required: [] },
+    execute: async ({ max = 15, hours } = {}) => {
+      const query = hours
+        ? `is:unread in:inbox newer_than:${hours}h -category:promotions -category:social`
+        : 'is:unread in:inbox -category:promotions -category:social';
+      const emails = await triageEmails('personal', { max, query });
+      if (!emails) return GWS_NOT_AUTHED;
+      if (emails.length === 0) return '✉️ No unread personal emails.';
+      return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}\n   ${(e.snippet || '').slice(0, 150)}`).join('\n\n');
+    }
+  },
+  {
+    name: 'search_personal_email',
+    description: 'Search personal Gmail with a query.',
+    parameters: { type: 'object', properties: { query: { type: 'string' }, max: { type: 'number' } }, required: ['query'] },
+    execute: async ({ query, max = 10 }) => {
+      const emails = await searchEmails('personal', query, max);
+      if (!emails) return GWS_NOT_AUTHED;
+      if (emails.length === 0) return `No personal emails for: "${query}"`;
+      return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}`).join('\n');
+    }
+  },
+  {
+    name: 'send_personal_email',
+    description: 'Send an email from the personal account (aatif20@gmail.com).',
+    parameters: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'subject', 'body'] },
+    execute: async ({ to, subject, body }) => {
+      try { await sendEmail('personal', { to, subject, body }); return `✅ Personal email sent to ${to}`; }
+      catch (err) { return `❌ Failed: ${err.message}`; }
+    }
+  },
+  {
+    name: 'reply_to_email',
+    description: 'Reply to an email from the personal account.',
+    parameters: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'subject', 'body'] },
+    execute: async ({ to, subject, body }) => {
+      try {
+        await sendEmail('personal', { to, subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`, body });
+        return `✅ Reply sent to ${to}`;
+      } catch (err) { return `❌ Failed: ${err.message}`; }
+    }
+  },
+  {
+    name: 'check_personal_calendar',
+    description: 'List upcoming personal calendar events (aatif20@gmail.com).',
+    parameters: { type: 'object', properties: { days: { type: 'number' }, today_only: { type: 'boolean' } }, required: [] },
+    execute: async ({ days = 2, today_only = false } = {}) => {
+      const events = await getAgenda('personal', { days, today: today_only });
+      if (!events) return GWS_NOT_AUTHED;
+      if (events.length === 0) return '📅 No upcoming personal calendar events.';
+      return events.map(e => {
+        const start = e.start?.dateTime || e.start?.date || '';
+        const end = e.end?.dateTime || e.end?.date || '';
+        return `📅 ${e.summary} | ${start} → ${end}${e.location ? ` | 📍 ${e.location}` : ''}`;
+      }).join('\n');
     }
   }
 ];
@@ -509,6 +675,7 @@ const CAREERBOT_TOOLS = [
 // Tool map for agents that need tools when created by the gateway
 const AGENT_TOOLS = {
   '01-edmobot': EDMOBOT_TOOLS,
+  '04-socialbot': SOCIALBOT_TOOLS,
   '05-jarvis': JARVIS_TOOLS,
   '06-cfobot': CFOBOT_TOOLS,
   '12-careerbot': CAREERBOT_TOOLS

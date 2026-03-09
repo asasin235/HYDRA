@@ -12,6 +12,10 @@ import path from 'path';
 import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { writeBrain, readBrain, appendBrain } from '../core/filesystem.js';
+import {
+  triageEmails, searchEmails, getEmail, sendEmail,
+  getAgenda, NOT_AUTHED_MSG,
+} from '../core/gws.js';
 
 validateEnv('04-socialbot');
 
@@ -33,7 +37,111 @@ const social = new Agent({
   name: '04-socialbot',
   model: 'anthropic/claude-haiku-4-5',
   systemPromptPath: 'prompts/04-socialbot.txt',
-  tools: [],
+  tools: [
+    {
+      name: 'check_personal_email',
+      description: 'List recent unread emails from the personal inbox (aatif20@gmail.com).',
+      parameters: {
+        type: 'object',
+        properties: {
+          max: { type: 'number', description: 'Max emails to return (default: 15)' },
+          hours: { type: 'number', description: 'Only show emails newer than N hours (optional)' }
+        },
+        required: []
+      },
+      execute: async ({ max = 15, hours } = {}) => {
+        const query = hours
+          ? `is:unread in:inbox newer_than:${hours}h -category:promotions -category:social`
+          : 'is:unread in:inbox -category:promotions -category:social';
+        const emails = await triageEmails('personal', { max, query });
+        if (!emails) return NOT_AUTHED_MSG;
+        if (emails.length === 0) return '✉️ No unread personal emails.';
+        return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}\n   ${(e.snippet || '').slice(0, 150)}`).join('\n\n');
+      }
+    },
+    {
+      name: 'search_personal_email',
+      description: 'Search personal Gmail (aatif20@gmail.com) with a query.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Gmail search query, e.g. "from:friend@gmail.com"' },
+          max: { type: 'number', description: 'Max results (default: 10)' }
+        },
+        required: ['query']
+      },
+      execute: async ({ query, max = 10 }) => {
+        const emails = await searchEmails('personal', query, max);
+        if (!emails) return NOT_AUTHED_MSG;
+        if (emails.length === 0) return `No personal emails found for: "${query}"`;
+        return emails.map(e => `📧 From: ${e.from || e.sender} | ${e.subject} | ${e.date || ''}`).join('\n');
+      }
+    },
+    {
+      name: 'send_personal_email',
+      description: 'Send an email from the personal account (aatif20@gmail.com).',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'Recipient email address' },
+          subject: { type: 'string', description: 'Email subject' },
+          body: { type: 'string', description: 'Email body (plain text)' }
+        },
+        required: ['to', 'subject', 'body']
+      },
+      execute: async ({ to, subject, body }) => {
+        try {
+          await sendEmail('personal', { to, subject, body });
+          return `✅ Personal email sent to ${to}: "${subject}"`;
+        } catch (err) {
+          return `❌ Failed to send: ${err.message}`;
+        }
+      }
+    },
+    {
+      name: 'reply_to_email',
+      description: 'Reply to an email using the same account the email was sent to. Detects personal vs work from the message ID context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'Reply-to email address' },
+          subject: { type: 'string', description: 'Subject (prefix with Re: if needed)' },
+          body: { type: 'string', description: 'Reply body text' }
+        },
+        required: ['to', 'subject', 'body']
+      },
+      execute: async ({ to, subject, body }) => {
+        try {
+          await sendEmail('personal', { to, subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`, body });
+          return `✅ Reply sent to ${to}`;
+        } catch (err) {
+          return `❌ Failed to reply: ${err.message}`;
+        }
+      }
+    },
+    {
+      name: 'check_personal_calendar',
+      description: 'List upcoming personal calendar events (aatif20@gmail.com).',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: 'Days ahead to look (default: 2)' },
+          today_only: { type: 'boolean', description: "Only show today's events" }
+        },
+        required: []
+      },
+      execute: async ({ days = 2, today_only = false } = {}) => {
+        const events = await getAgenda('personal', { days, today: today_only });
+        if (!events) return NOT_AUTHED_MSG;
+        if (events.length === 0) return '📅 No upcoming personal calendar events.';
+        return events.map(e => {
+          const start = e.start?.dateTime || e.start?.date || '';
+          const end = e.end?.dateTime || e.end?.date || '';
+          return `📅 ${e.summary} | ${start} → ${end}${e.location ? ` | 📍 ${e.location}` : ''}`;
+        }).join('\n');
+      }
+    },
+  ],
   namespace: '04_SOCIAL',
   tokenBudget: DAILY_BUDGET_TOKENS
 });

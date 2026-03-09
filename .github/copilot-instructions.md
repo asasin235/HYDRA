@@ -1,10 +1,14 @@
 # HYDRA — Copilot Instructions
 
+
 ## What This Is
+
 
 HYDRA is a multi-agent AI personal operating system. Each agent is a standalone Node.js process managed by PM2, communicating via Slack (Socket Mode) and a Redis event bus. Agents call LLMs through OpenRouter (OpenAI-compatible API) and persist state in SQLite + LanceDB (vector memory). The system runs on a Mac Mini (macOS, Apple Silicon, Node 22+).
 
+
 ## Project Structure
+
 
 - `core/` — Shared infrastructure imported by every agent. **Never duplicate logic that belongs here.**
   - `agent.js` — Base `Agent` class: LLM calls (OpenRouter), tool-calling loop (max 10 iterations), retry with exponential backoff, budget checks, heartbeat, conversation history, Winston logging
@@ -25,9 +29,12 @@ HYDRA is a multi-agent AI personal operating system. Each agent is a standalone 
 - `mcp/` — MCP stdio server exposing HYDRA tools to external AI clients (see **MCP Server** below).
 - `ecosystem.config.cjs` — PM2 process definitions. Uses `app()` helper for agents, `script()` for pipelines.
 
+
 ## Key Patterns
 
+
 ### Creating or Modifying an Agent
+
 
 1. Add config to `core/registry.js` AGENTS object (namespace, model, tier, promptFile, etc.)
 2. Create `agents/XX-name.js` — import `Agent` from `core/agent.js`, call `validateEnv('XX-name')` at top
@@ -35,7 +42,9 @@ HYDRA is a multi-agent AI personal operating system. Each agent is a standalone 
 4. Add to `ecosystem.config.cjs` via `app('XX-name')`
 5. Agent tools: define as `{ name, description, parameters, execute }` objects passed to `Agent` constructor
 
+
 ### Agent Tool Definition Pattern (from edmobot, jarvis, etc.)
+
 
 ```js
 const tools = [
@@ -53,11 +62,15 @@ const tools = [
 const agent = new Agent({ name: 'XX-name', model: '...', systemPromptPath: 'prompts/XX-name.txt', tools, namespace: 'XX_NAME' });
 ```
 
+
 ### Non-LLM Agents
+
 
 `08-watchtower` is a pure monitoring agent — no `Agent` base class, no LLM calls, zero token cost. It uses `createLogger`, `readBrain/writeBrain`, and PM2 CLI directly. Use this pattern for infrastructure-only agents.
 
+
 ### Storage Layout
+
 
 - `$BRAIN_PATH/brain/<NAMESPACE>/` — Per-agent JSON state (daily logs, heartbeat, config)
 - `$BRAIN_PATH/brain/usage/` — Budget tracking JSONs (monthly_usage, paused_agents, circuit_breakers)
@@ -67,9 +80,12 @@ const agent = new Agent({ name: 'XX-name', model: '...', systemPromptPath: 'prom
 - `$BRAIN_PATH/shared_context/audio/` — Audio transcript Markdown files from Plaud/whisper.cpp
 - `$EXTERNAL_SSD_PATH/` — Heavy data (audio files, screenpipe captures, backups)
 
+
 ### Scripts & Data Pipelines
 
+
 All scripts run as persistent PM2 processes (defined via `script()` in `ecosystem.config.cjs`). They poll on intervals, not cron.
+
 
 | Script | Purpose | Interval | Data Flow |
 |---|---|---|---|
@@ -80,16 +96,21 @@ All scripts run as persistent PM2 processes (defined via `script()` in `ecosyste
 | `sms-reader.js` | Reads macOS Messages `chat.db` → parses Indian bank SMS → stores in SQLite `transactions` table + `sms_inbox.json` for CFO bot | 5min | `~/Library/Messages/chat.db` → `hydra.db` transactions |
 | `dashboard.js` | Express server (port 3080) showing per-agent token usage, costs, health status | Always-on | `brain/usage/` JSON → HTTP dashboard |
 
+
 **Adding a new script**: Create in `scripts/`, add `script('name', './scripts/name.js')` to `ecosystem.config.cjs`. Follow the poll-loop pattern (not cron) — see `screenpipe-sync.js` for the simplest example.
 
+
 ### MCP Server (`mcp/hydra-mcp-server.js`)
+
 
 Stdio-based MCP server — **not** managed by PM2. Spawned on-demand by external AI clients (e.g., OpenClaw) via:
 ```sh
 openclaw mcp add --name hydra --command "node mcp/hydra-mcp-server.js"
 ```
 
+
 Current tools: `hydra_home_control`, `hydra_read_sensors`, `hydra_paper_trade`, `hydra_portfolio`, `hydra_debt_status`, `hydra_search_brain`, `hydra_write_context`, `hydra_agent_status`, `hydra_read_messages`.
+
 
 **Adding a new MCP tool**:
 1. Add tool schema to the `ListToolsRequestSchema` handler's returned `tools` array:
@@ -106,7 +127,39 @@ Current tools: `hydra_home_control`, `hydra_read_sensors`, `hydra_paper_trade`, 
    ```
 3. Import any needed `core/` modules at the top of the file. The MCP server has access to all HYDRA core modules.
 
+
+### External MCP Servers (Project Management)
+
+
+Two external MCP servers are connected to the AI development environment and must be kept in sync with every significant HYDRA change:
+
+#### Linear MCP (`linear_alt`)
+Linear is the **canonical issue tracker** for HYDRA. All features, bugs, pipelines, and agent work are tracked as issues in the `HYD` team.
+
+- **When to update Linear**: create or update issues whenever you implement a feature (`feat`), fix a bug (`fix`), or start/complete work on any tracked HYD issue.
+- **Issue lifecycle**: move issues from `Backlog` → `In Progress` when you start work, → `Done` when the commit is pushed.
+- **Projects map to HYDRA subsystems**: each project (Core Infrastructure, Audio Pipeline, Screen Pipeline, Vector Memory, Slack Dashboard, Agent Implementation, MCP & Query API, Testing & QA) corresponds to a `core/` module or `agents/` area. Always assign new issues to the correct project.
+- **Identifier convention**: issue identifiers are `HYD-N`. Reference them in commit messages: `feat(cfobot): implement debt payoff model HYD-37`.
+- **Priorities**: Urgent = must ship this session; High = current sprint; Medium = next sprint; Low = backlog/research.
+- **Never create duplicate issues**: search Linear (`linear__search_issues`) before creating a new one.
+
+#### Notion MCP (`notion`)
+Notion is the **long-form knowledge base** for HYDRA — architecture decisions, agent runbooks, prompt engineering notes, research, and the project wiki.
+
+- **When to update Notion**: after any architectural change (new core module, new agent, changed data flow), update the relevant Notion page. After any prompt engineering iteration, log the change in the agent's runbook page.
+- **Key pages to keep current**:
+  - `HYDRA Architecture Overview` — system diagram, data flows, storage layout
+  - `Agent Registry` — mirrors `core/registry.js` in human-readable form (model, tier, schedule, purpose)
+  - `Prompt Engineering Log` — per-agent prompt version history with rationale
+  - `Runbooks` — one page per agent with startup, debugging, and rollback instructions
+  - `Decision Log` — ADR-style entries for significant architectural choices
+- **Search before writing**: use `notion__search` to find the existing page before creating a duplicate.
+- **Page updates**: prefer updating existing pages over creating new ones. Use `notion__update_block` or append new sections rather than overwriting.
+- **Sync cadence**: Notion is for durable reference; it does not need to be updated on every commit — update after sprints, architectural pivots, or when a runbook would genuinely help future debugging.
+
+
 ## Commands
+
 
 ```sh
 npm start              # Start all agents via PM2
@@ -117,7 +170,9 @@ pm2 restart 01-edmobot # Restart a single agent
 node agents/08-watchtower.js --sweep-now  # Manual health sweep
 ```
 
+
 ## Conventions
+
 
 - **ESM only** — `"type": "module"` in package.json. Use `import`/`export`, never `require` (except `ecosystem.config.cjs` and `newrelic.cjs`).
 - **All LLM calls go through OpenRouter** — the `openai` SDK is configured with `baseURL: 'https://openrouter.ai/api/v1'`. Never call model providers directly.
@@ -128,10 +183,15 @@ node agents/08-watchtower.js --sweep-now  # Manual health sweep
 - **Context injection** — every agent auto-searches LanceDB for relevant screen/audio context using its `contextQuery` from registry. Don't manually wire this; the `Agent.run()` method handles it.
 - **Budget awareness** — `checkBudget()` is called before every LLM request. If over budget, the agent returns a blocked message instead of calling the API.
 - **Conversation history** — stored in-memory + SQLite `conversation_history` table. `Agent` class manages injection and pruning automatically (configurable via `maxHistoryTurns` in registry).
+- **Linear sync** — reference the HYD issue identifier in every commit message. Move the issue to `In Progress` before starting work and `Done` after pushing.
+- **Notion sync** — update the relevant runbook or architecture page after any significant structural change. Log prompt changes in the Prompt Engineering Log.
+
 
 ## Model Preferences
 
+
 Use the right model for the right job — both for HYDRA agents and for your own AI-assisted development:
+
 
 **For HYDRA agent config** (in `core/registry.js`):
 - **Planning / orchestration / complex reasoning** → `anthropic/claude-opus-4.6` (Tier 1 only, high cost)
@@ -141,13 +201,17 @@ Use the right model for the right job — both for HYDRA agents and for your own
 - **Bulk/optional agents** → `mistralai/mistral-small-3.2-24b-instruct` (cheapest, 24K context, used by brandbot, sahibabot, biobot, auditor)
 - **Haiku for speed** → `anthropic/claude-haiku-4.5` (mid-cost, 150K context, used by socialbot)
 
+
 **For AI-assisted development on this codebase**:
 - **Planning, architecture, complex reasoning** → Claude Opus 4.6 — use for designing new agents, refactoring core modules, multi-file changes that need holistic understanding
 - **Coding, implementation, debugging** → Claude Sonnet 4.6 with extended thinking — use for writing agent tools, fixing bugs, implementing features, code reviews
 
+
 Cost rates are defined in `core/bottleneck.js` `MODEL_RATES`. Update there when adding new models.
 
+
 ## Development Workflow
+
 
 1. **Always test end-to-end before finishing** — never commit untested code. Run the specific agent or script to verify behaviour:
    ```sh
@@ -169,3 +233,5 @@ Cost rates are defined in `core/bottleneck.js` `MODEL_RATES`. Update there when 
 3. **Lint before pushing**: `npm run lint` (ESLint configured for ESM)
 4. **Push after every commit** — keep remote in sync. Always `git push origin main` after committing.
 5. **Update README.md with every commit** — the Changelog section at the bottom of `README.md` must reflect all significant changes. Also update relevant sections (agent registry table, core modules, project structure, tech stack, roadmap) when adding new agents, modules, or scripts.
+6. **Update Linear** — move the corresponding HYD issue to `Done` and add a comment with the commit SHA after pushing.
+7. **Update Notion** — after architectural changes or prompt iterations, update the relevant runbook/architecture page so the knowledge base stays accurate.
