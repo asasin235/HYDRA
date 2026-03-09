@@ -77,7 +77,7 @@ echo ""
 read -rp "  Press Enter to open browser..."
 
 GOOGLE_WORKSPACE_CLI_CONFIG_DIR="$WORK_DIR" \
-  "$GWS_BIN" auth login -s gmail,calendar,chat
+  "$GWS_BIN" auth login --scopes "https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/chat.spaces,https://www.googleapis.com/auth/chat.spaces.readonly,https://www.googleapis.com/auth/chat.messages,https://www.googleapis.com/auth/userinfo.email"
 
 # ── Step 3: Verify ────────────────────────────────────────────────────────────
 
