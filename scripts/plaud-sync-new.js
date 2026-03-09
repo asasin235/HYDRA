@@ -25,7 +25,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { PassThrough } from 'stream';
 import ffmpeg from 'fluent-ffmpeg';
-import { publishBus, subscribeBus } from '../core/bus.js';
+import { publish as publishBus, subscribe as subscribeBus } from '../core/bus.js';
 import { getState, setState } from '../core/db.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────

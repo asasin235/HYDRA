@@ -817,7 +817,11 @@ export async function searchAllContext(query, { limit = 10, source_type, since }
     const queryEmbedding = await getEmbedding(query);
 
     const lanceStart = performance.now();
-    const results = await contextFeedTable.search(queryEmbedding).limit(limit * 3).toArray();
+    let search = contextFeedTable.search(queryEmbedding).limit(limit * 3);
+    // Pre-filter by source_type during vector search so audio/screen results aren't
+    // crowded out by the other type (post-search filter would miss matches otherwise)
+    if (source_type) search = search.filter(`source_type = '${source_type}'`);
+    const results = await search.toArray();
     const lanceDurationMs = Math.round((performance.now() - lanceStart) * 100) / 100;
 
     let filtered = results;
