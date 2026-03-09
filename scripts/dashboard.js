@@ -18,7 +18,10 @@ import crypto from 'crypto';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import { AGENTS } from '../core/registry.js';
-import { getRecentLogs, getRecentConversation, db } from '../core/db.js';
+import { getRecentLogs, getRecentConversation, db,
+  listRecordingBriefs, getRecordingBrief, getProjectSummary,
+  listActionItems, updateActionItem, saveRecordingBrief
+} from '../core/db.js';
 
 const app = express();
 const PORT = process.env.DASHBOARD_PORT || 3080;
@@ -491,7 +494,66 @@ app.post('/api/memory/ingest', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Plaud Audio Ingest Endpoint ──────────────────────────────────────────────
+// ── Context Intelligence API ────────────────────────────────────────────────
+
+app.get('/api/context/summary', (req, res) => {
+  try {
+    res.json(getProjectSummary());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/context/briefs', (req, res) => {
+  try {
+    const { project, since, limit } = req.query;
+    const briefs = listRecordingBriefs({
+      project: project || null,
+      since: since || null,
+      limit: limit ? parseInt(limit) : 50
+    });
+    res.json(briefs);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/context/briefs/:id', (req, res) => {
+  try {
+    const brief = getRecordingBrief(req.params.id);
+    if (!brief) return res.status(404).json({ error: 'Not found' });
+    res.json(brief);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/context/briefs/:id/reclassify', (req, res) => {
+  try {
+    const brief = getRecordingBrief(req.params.id);
+    if (!brief) return res.status(404).json({ error: 'Not found' });
+    const { project } = req.body;
+    if (!project) return res.status(400).json({ error: 'project required' });
+    saveRecordingBrief({ ...brief, id: req.params.id, project });
+    res.json({ success: true, project });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/context/actions', (req, res) => {
+  try {
+    const { project, status, limit } = req.query;
+    const actions = listActionItems({
+      project: project || null,
+      status: status || null,
+      limit: limit ? parseInt(limit) : 100
+    });
+    res.json(actions);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/context/actions/:id', (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['open', 'done', 'snoozed', 'delegated'].includes(status))
+      return res.status(400).json({ error: 'Invalid status' });
+    updateActionItem(req.params.id, status);
+    res.json({ success: true, status });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // POST /api/ingest/audio — receives multipart audio WAV buffer + metadata JSON
 // Transcribes via whisper, writes to shared_context, ingests to LanceDB
 app.post('/api/ingest/audio', async (req, res) => {
@@ -1183,6 +1245,13 @@ function buildSidebar(activePage) {
       <div class="nav-section">
         <div class="nav-section-title">Neural Agents</div>
         ${agentItems}
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">Intelligence</div>
+        <a class="nav-item${activePage === 'context' ? ' active' : ''}" href="/context">
+          <span class="nav-icon" style="background:rgba(255,215,0,.15);color:#ffd700">${SVG.chart}</span>
+          <span>Context</span>
+        </a>
       </div>
       <div class="nav-section">
         <div class="nav-section-title">Tools</div>
@@ -2603,6 +2672,241 @@ async function testLanceSearch() {
 }
 loadLanceData();
 <\/script>
+</body></html>`;
+  res.send(html);
+});
+
+// ── Context Intelligence Page ────────────────────────────────────────────────
+app.get('/context', (req, res) => {
+  const sidebar = buildSidebar('context');
+  const projectColors = {
+    edmo: '#00e5ff', hydra: '#7c4dff', trading: '#ff6d00', finance: '#00c853',
+    health: '#ff4081', personal: '#ffab00', freelance: '#448aff', career: '#e040fb', general: '#78909c'
+  };
+  const projectEmoji = {
+    edmo: '🏢', hydra: '🐉', trading: '📈', finance: '💰', health: '💪',
+    personal: '🏠', freelance: '💼', career: '🎯', general: '📝'
+  };
+  const html = `${pageHead('Context Intelligence', `
+    .project-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:24px}
+    .project-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;cursor:pointer;transition:all var(--transition);backdrop-filter:blur(12px);position:relative;overflow:hidden}
+    .project-card:hover{border-color:var(--border-hover);transform:translateY(-2px);box-shadow:0 8px 32px rgba(0,0,0,.2)}
+    .project-card .color-bar{position:absolute;top:0;left:0;right:0;height:3px}
+    .project-card .emoji{font-size:28px;margin-bottom:8px}
+    .project-card .name{font-size:16px;font-weight:600;color:var(--text-primary);text-transform:capitalize;margin-bottom:4px}
+    .project-card .stats{display:flex;gap:16px;font-size:12px;color:var(--text-muted);margin-bottom:8px}
+    .project-card .stats span{display:flex;align-items:center;gap:4px}
+    .project-card .last{font-size:11px;color:var(--text-muted)}
+    .brief-list{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+    .brief-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;transition:all var(--transition)}
+    .brief-card:hover{border-color:var(--border-hover)}
+    .brief-card .headline{font-size:14px;font-weight:500;color:var(--text-primary);margin-bottom:6px}
+    .brief-card .meta{display:flex;gap:12px;font-size:11px;color:var(--text-muted);margin-bottom:8px;flex-wrap:wrap}
+    .brief-card .meta .tag{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:500}
+    .brief-card .topics{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+    .brief-card .topic{padding:2px 8px;border-radius:4px;font-size:10px;background:var(--accent-glow);color:var(--accent)}
+    .brief-card .actions-list{margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+    .brief-card .action-item{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-secondary);padding:4px 0}
+    .brief-card .action-item input[type=checkbox]{accent-color:var(--accent);margin-top:2px}
+    .brief-card .action-item.done{text-decoration:line-through;opacity:.5}
+    .filter-bar{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+    .filter-bar select,.filter-bar input{padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-card);color:var(--text-primary);font-size:12px;font-family:inherit}
+    .filter-bar select:focus,.filter-bar input:focus{outline:none;border-color:var(--accent)}
+    .back-btn{display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:13px;cursor:pointer;margin-bottom:16px;transition:color var(--transition)}
+    .back-btn:hover{color:var(--accent)}
+    .action-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:24px}
+    .action-panel h3{font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text-primary)}
+    .stat-badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:500}
+  `)}
+<div class="app">
+  ${sidebar}
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-title">${SVG.chart} Context Intelligence</div>
+        <div class="page-subtitle">Project-mapped recording briefs and action tracking — "I am inevitable"</div>
+      </div>
+      <button class="btn" onclick="loadContext()">${SVG.refresh} Refresh</button>
+    </div>
+
+    <div id="context-view">
+      <!-- Summary view (projects grid) -->
+      <div id="project-overview">
+        <div class="project-grid" id="project-grid"></div>
+        <div class="section-title" style="margin-top:24px">📋 Open Action Items</div>
+        <div id="global-actions"></div>
+        <div class="section-title" style="margin-top:24px">🎙️ Recent Recordings</div>
+        <div class="filter-bar">
+          <select id="filter-project" onchange="loadContext()"><option value="">All Projects</option></select>
+          <select id="filter-urgency" onchange="loadBriefs()"><option value="">All Urgency</option><option value="high">🔴 High</option><option value="medium">🟡 Medium</option><option value="low">🟢 Low</option></select>
+        </div>
+        <div class="brief-list" id="briefs-list"></div>
+      </div>
+
+      <!-- Project detail view (hidden by default) -->
+      <div id="project-detail" style="display:none">
+        <div class="back-btn" onclick="showOverview()">← Back to all projects</div>
+        <div id="detail-header"></div>
+        <div class="action-panel" id="detail-actions"></div>
+        <div class="section-title">🎙️ Recordings</div>
+        <div class="brief-list" id="detail-briefs"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const PC = ${JSON.stringify(projectColors)};
+const PE = ${JSON.stringify(projectEmoji)};
+let allBriefs = [], allActions = [], summaryData = [];
+
+async function loadContext() {
+  const [sumRes, briefRes, actRes] = await Promise.all([
+    fetch('/api/context/summary').then(r=>r.json()),
+    fetch('/api/context/briefs?limit=200').then(r=>r.json()),
+    fetch('/api/context/actions?status=open').then(r=>r.json())
+  ]);
+  summaryData = sumRes; allBriefs = briefRes; allActions = actRes;
+  renderProjects(); renderGlobalActions(); loadBriefs();
+  populateFilter();
+}
+
+function populateFilter() {
+  const sel = document.getElementById('filter-project');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All Projects</option>' +
+    summaryData.map(p => '<option value="'+p.project+'"'+(cur===p.project?' selected':'')+'>'+
+      (PE[p.project]||'📝')+' '+p.project+'</option>').join('');
+}
+
+function renderProjects() {
+  const grid = document.getElementById('project-grid');
+  if (!summaryData.length) { grid.innerHTML = '<div style="color:var(--text-muted);padding:24px;text-align:center">No recordings triaged yet. Run backfill or wait for new recordings.</div>'; return; }
+  grid.innerHTML = summaryData.map(p => {
+    const c = PC[p.project]||'#78909c';
+    const ago = p.last_activity ? timeAgo(p.last_activity) : 'never';
+    return \`<div class="project-card" onclick="showProject('\${p.project}')">
+      <div class="color-bar" style="background:\${c}"></div>
+      <div class="emoji">\${PE[p.project]||'📝'}</div>
+      <div class="name">\${p.project}</div>
+      <div class="stats">
+        <span>🎙️ \${p.recording_count} recording\${p.recording_count!==1?'s':''}</span>
+        <span>✅ \${p.open_actions} open action\${p.open_actions!==1?'s':''}</span>
+      </div>
+      <div class="last">Last activity: \${ago}</div>
+    </div>\`;
+  }).join('');
+}
+
+function renderGlobalActions() {
+  const el = document.getElementById('global-actions');
+  if (!allActions.length) { el.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:13px">No open action items 🎉</div>'; return; }
+  el.innerHTML = allActions.slice(0, 10).map(a => \`
+    <div class="brief-card" style="padding:10px 16px">
+      <div class="action-item">
+        <input type="checkbox" onchange="toggleAction('\${a.id}', this.checked)">
+        <div>
+          <div style="font-size:13px;color:var(--text-primary)">\${a.task}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+            \${PE[a.project]||''} \${a.project}\${a.owner ? ' • '+a.owner : ''}\${a.due_date ? ' • due '+a.due_date : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+  \`).join('');
+}
+
+function loadBriefs() {
+  const proj = document.getElementById('filter-project').value;
+  const urg = document.getElementById('filter-urgency').value;
+  let filtered = allBriefs;
+  if (proj) filtered = filtered.filter(b => b.project === proj);
+  if (urg) filtered = filtered.filter(b => b.urgency === urg);
+  renderBriefs(filtered, 'briefs-list');
+}
+
+function renderBriefs(briefs, elId) {
+  const el = document.getElementById(elId);
+  if (!briefs.length) { el.innerHTML = '<div style="color:var(--text-muted);padding:16px;font-size:13px">No recordings match filters</div>'; return; }
+  el.innerHTML = briefs.map(b => {
+    const c = PC[b.project]||'#78909c';
+    const urgColor = b.urgency==='high'?'var(--danger)':b.urgency==='medium'?'#ffab00':'var(--success)';
+    const topics = safeParse(b.key_topics)||[];
+    const actions = safeParse(b.action_items)||[];
+    const decisions = safeParse(b.decisions)||[];
+    const ago = b.triaged_at ? timeAgo(b.triaged_at) : '';
+    return \`<div class="brief-card">
+      <div class="headline">\${PE[b.project]||'📝'} \${b.one_line || b.filename || b.id}</div>
+      <div class="meta">
+        <span class="tag" style="background:\${c}20;color:\${c}">\${b.project}</span>
+        <span class="tag" style="background:\${urgColor}20;color:\${urgColor}">\${b.urgency}</span>
+        <span>\${b.meeting_type || 'unknown'}</span>
+        \${b.duration_s ? '<span>⏱️ '+formatDuration(b.duration_s)+'</span>' : ''}
+        \${ago ? '<span>'+ago+'</span>' : ''}
+      </div>
+      \${topics.length ? '<div class="topics">'+topics.map(t => '<span class="topic">'+t+'</span>').join('')+'</div>' : ''}
+      \${decisions.length ? '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">🔑 '+decisions.join(' • ')+'</div>' : ''}
+      \${actions.length ? '<div class="actions-list">'+actions.map(a =>
+        '<div class="action-item"><span style="color:var(--accent)">→</span> '+
+        (typeof a==='string'?a:(a.task||''))+(a&&a.owner?' <span style="color:var(--text-muted)">@'+a.owner+'</span>':'')+
+        '</div>').join('')+'</div>' : ''}
+    </div>\`;
+  }).join('');
+}
+
+function showProject(project) {
+  document.getElementById('project-overview').style.display = 'none';
+  document.getElementById('project-detail').style.display = 'block';
+  const c = PC[project]||'#78909c';
+  const s = summaryData.find(p => p.project === project) || {};
+  const projActions = allActions.filter(a => a.project === project);
+  const projBriefs = allBriefs.filter(b => b.project === project);
+
+  document.getElementById('detail-header').innerHTML = \`
+    <div class="page-header" style="margin-bottom:16px">
+      <div>
+        <div class="page-title" style="color:\${c}">\${PE[project]||'📝'} \${project.charAt(0).toUpperCase()+project.slice(1)}</div>
+        <div class="page-subtitle">\${s.recording_count||0} recordings • \${projActions.length} open actions</div>
+      </div>
+    </div>\`;
+
+  const actEl = document.getElementById('detail-actions');
+  if (projActions.length) {
+    actEl.innerHTML = '<h3>✅ Open Action Items</h3>' + projActions.map(a => \`
+      <div class="action-item" style="padding:6px 0">
+        <input type="checkbox" onchange="toggleAction('\${a.id}', this.checked)">
+        <div>
+          <div style="font-size:13px">\${a.task}</div>
+          <div style="font-size:11px;color:var(--text-muted)">\${a.owner||'unassigned'}\${a.due_date?' • due '+a.due_date:''}</div>
+        </div>
+      </div>\`).join('');
+  } else { actEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No open actions 🎉</div>'; }
+
+  renderBriefs(projBriefs, 'detail-briefs');
+}
+
+function showOverview() {
+  document.getElementById('project-overview').style.display = 'block';
+  document.getElementById('project-detail').style.display = 'none';
+}
+
+async function toggleAction(id, done) {
+  await fetch('/api/context/actions/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status: done?'done':'open'}) });
+  loadContext();
+}
+
+function safeParse(v) { if (!v) return []; if (Array.isArray(v)) return v; try { return JSON.parse(v); } catch { return []; } }
+function formatDuration(s) { if (!s) return ''; const m = Math.round(s/60); return m < 60 ? m+'m' : Math.floor(m/60)+'h '+m%60+'m'; }
+function timeAgo(d) {
+  const ms = Date.now() - new Date(d+'Z').getTime();
+  const mins = Math.floor(ms/60000); if (mins < 60) return mins+'m ago';
+  const hrs = Math.floor(mins/60); if (hrs < 24) return hrs+'h ago';
+  return Math.floor(hrs/24)+'d ago';
+}
+
+loadContext();
+</script>
+${commonScripts()}
 </body></html>`;
   res.send(html);
 });
