@@ -26,6 +26,7 @@ module.exports = {
     script('gws-sync', './scripts/gws-sync.js'),
     // screenpipe-sync removed — ingest-context is the single canonical ingestor
     script('ingest-context', './scripts/ingest-context.js'),
+    script('audio-triage', './scripts/audio-triage.js'),
     script('dashboard', './scripts/dashboard.js'),
     {
       name: 'backup',

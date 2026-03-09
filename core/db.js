@@ -99,6 +99,44 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_conv_history_agent ON conversation_history(agent, created_at);
+
+  CREATE TABLE IF NOT EXISTS recording_briefs (
+    id TEXT PRIMARY KEY,
+    external_id TEXT,
+    project TEXT NOT NULL DEFAULT 'general',
+    meeting_type TEXT,
+    participants TEXT,
+    action_items_json TEXT,
+    decisions TEXT,
+    key_topics TEXT,
+    urgency TEXT DEFAULT 'medium',
+    one_line TEXT,
+    slack_ts TEXT,
+    slack_channel TEXT,
+    triaged_at TEXT DEFAULT (datetime('now')),
+    filename TEXT,
+    duration_s REAL,
+    transcript_preview TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS action_items (
+    id TEXT PRIMARY KEY,
+    recording_id TEXT,
+    task TEXT NOT NULL,
+    owner TEXT,
+    due_date TEXT,
+    project TEXT,
+    status TEXT DEFAULT 'open',
+    created_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT,
+    FOREIGN KEY (recording_id) REFERENCES recording_briefs(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_briefs_project ON recording_briefs(project);
+  CREATE INDEX IF NOT EXISTS idx_briefs_triaged ON recording_briefs(triaged_at);
+  CREATE INDEX IF NOT EXISTS idx_actions_status ON action_items(status);
+  CREATE INDEX IF NOT EXISTS idx_actions_project ON action_items(project);
+  CREATE INDEX IF NOT EXISTS idx_actions_recording ON action_items(recording_id);
 `);
 
 // Initialize debt_tracker row if not exists
@@ -237,6 +275,54 @@ const pruneConvStmt = db.prepare(`
   WHERE agent = ? AND id NOT IN (
     SELECT id FROM conversation_history WHERE agent = ? ORDER BY created_at DESC LIMIT ?
   )
+`);
+
+// Prepared statements for recording_briefs
+const saveBriefStmt = db.prepare(`
+  INSERT OR REPLACE INTO recording_briefs
+    (id, external_id, project, meeting_type, participants, action_items_json, decisions, key_topics, urgency, one_line, slack_ts, slack_channel, triaged_at, filename, duration_s, transcript_preview)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)
+`);
+
+const getBriefStmt = db.prepare(`SELECT * FROM recording_briefs WHERE id = ?`);
+
+const listBriefsStmt = db.prepare(`
+  SELECT * FROM recording_briefs
+  WHERE (? IS NULL OR project = ?)
+  ORDER BY triaged_at DESC LIMIT ?
+`);
+
+const listBriefsSinceStmt = db.prepare(`
+  SELECT * FROM recording_briefs
+  WHERE (? IS NULL OR project = ?) AND triaged_at >= ?
+  ORDER BY triaged_at DESC LIMIT ?
+`);
+
+// Prepared statements for action_items
+const saveActionStmt = db.prepare(`
+  INSERT OR REPLACE INTO action_items (id, recording_id, task, owner, due_date, project, status, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+`);
+
+const listActionsStmt = db.prepare(`
+  SELECT * FROM action_items
+  WHERE (? IS NULL OR project = ?) AND (? IS NULL OR status = ?)
+  ORDER BY created_at DESC LIMIT ?
+`);
+
+const updateActionStmt = db.prepare(`
+  UPDATE action_items SET status = ?, completed_at = CASE WHEN ? = 'done' THEN datetime('now') ELSE NULL END
+  WHERE id = ?
+`);
+
+const projectSummaryStmt = db.prepare(`
+  SELECT project,
+    COUNT(*) as recording_count,
+    MAX(triaged_at) as last_activity,
+    (SELECT COUNT(*) FROM action_items ai WHERE ai.project = rb.project AND ai.status = 'open') as open_actions
+  FROM recording_briefs rb
+  GROUP BY project
+  ORDER BY last_activity DESC
 `);
 
 /**
@@ -489,6 +575,98 @@ export function getRecentConversation(agent, limit = 10) {
  */
 export function pruneConversation(agent, keepLast = 20) {
   pruneConvStmt.run(agent, agent, keepLast);
+}
+
+/**
+ * Save a recording brief (triage result)
+ * @param {object} brief - Recording brief object
+ */
+export function saveRecordingBrief(brief) {
+  saveBriefStmt.run(
+    brief.id, brief.external_id || null, brief.project || 'general',
+    brief.meeting_type || null, JSON.stringify(brief.participants || []),
+    JSON.stringify(brief.action_items || []), JSON.stringify(brief.decisions || []),
+    JSON.stringify(brief.key_topics || []), brief.urgency || 'medium',
+    brief.one_line || null, brief.slack_ts || null, brief.slack_channel || null,
+    brief.filename || null, brief.duration_s || null,
+    (brief.transcript_preview || '').slice(0, 500)
+  );
+}
+
+/**
+ * Get a single recording brief by ID
+ * @param {string} id
+ * @returns {object|null}
+ */
+export function getRecordingBrief(id) {
+  const row = getBriefStmt.get(id);
+  if (!row) return null;
+  return parseBriefRow(row);
+}
+
+/**
+ * List recording briefs with optional project filter
+ * @param {object} opts - { project, since, limit }
+ * @returns {Array}
+ */
+export function listRecordingBriefs({ project = null, since = null, limit = 50 } = {}) {
+  const rows = since
+    ? listBriefsSinceStmt.all(project, project, since, limit)
+    : listBriefsStmt.all(project, project, limit);
+  return rows.map(parseBriefRow);
+}
+
+/**
+ * Get project summary stats
+ * @returns {Array} { project, recording_count, last_activity, open_actions }
+ */
+export function getProjectSummary() {
+  return projectSummaryStmt.all();
+}
+
+/**
+ * Save an action item
+ * @param {object} item - { id, recording_id, task, owner, due_date, project, status }
+ */
+export function saveActionItem(item) {
+  saveActionStmt.run(
+    item.id, item.recording_id || null, item.task,
+    item.owner || null, item.due_date || null,
+    item.project || 'general', item.status || 'open'
+  );
+}
+
+/**
+ * List action items with optional project/status filter
+ * @param {object} opts - { project, status, limit }
+ * @returns {Array}
+ */
+export function listActionItems({ project = null, status = null, limit = 100 } = {}) {
+  return listActionsStmt.all(project, project, status, status, limit);
+}
+
+/**
+ * Update action item status
+ * @param {string} id - Action item ID
+ * @param {string} status - New status: open, done, snoozed, delegated
+ */
+export function updateActionItem(id, status) {
+  updateActionStmt.run(status, status, id);
+}
+
+function parseBriefRow(row) {
+  return {
+    ...row,
+    participants: safeParse(row.participants),
+    action_items_json: safeParse(row.action_items_json),
+    decisions: safeParse(row.decisions),
+    key_topics: safeParse(row.key_topics),
+  };
+}
+
+function safeParse(val) {
+  if (!val) return [];
+  try { return JSON.parse(val); } catch { return []; }
 }
 
 /**
