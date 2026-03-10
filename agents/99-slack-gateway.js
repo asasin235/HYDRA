@@ -122,7 +122,7 @@ async function logDrop(entry) {
 // registers SIGTERM handlers, crons, and a health server that conflict with the gateway).
 import {
   isJiraConfigured, getMyTickets, getTicketDetails,
-  transitionTicket, addJiraComment
+  transitionTicket, addJiraComment, createJiraIssue
 } from '../core/jira.js';
 import {
   isGitHubConfigured, getFileContent, searchCode, listFiles,
@@ -182,6 +182,67 @@ const EDMOBOT_TOOLS = [
       if (!isJiraConfigured()) return 'Jira not configured.';
       await addJiraComment(ticket_key, comment);
       return `✅ Comment added to ${ticket_key}`;
+    }
+  },
+  {
+    name: 'create_jira_ticket',
+    description: 'Create a new Jira ticket immediately (Task, Bug, or Story). Use this when the user asks to create a ticket.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'Ticket title/summary' },
+        description: { type: 'string', description: 'Ticket description (plain text)' },
+        issueType: { type: 'string', description: 'Task, Bug, or Story (default: Task)' },
+        priority: { type: 'string', description: 'Highest, High, Medium, Low, Lowest' },
+        assignee: { type: 'string', description: 'Jira account ID of the assignee' },
+        labels: { type: 'array', items: { type: 'string' }, description: 'Labels to add' }
+      },
+      required: ['summary', 'description']
+    },
+    execute: async ({ summary, description, issueType = 'Task', priority, assignee, labels }) => {
+      if (!isJiraConfigured()) return 'Jira not configured.';
+      const params = { summary, description, issueType };
+      if (priority) params.priority = priority;
+      if (assignee) params.assignee = assignee;
+      if (labels) params.labels = labels;
+      const result = await createJiraIssue(params);
+      const baseUrl = process.env.JIRA_BASE_URL || 'https://ischoolconnect.atlassian.net';
+      return `✅ Jira ticket created: *${result.key}* — <${baseUrl}/browse/${result.key}|${result.key}>\nSummary: ${summary}`;
+    }
+  },
+  {
+    name: 'draft_jira_issue',
+    description: 'Draft a Jira issue and send to Slack for human approval before creation. Use when user wants to review before creating.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'Ticket title/summary' },
+        description: { type: 'string', description: 'Ticket description' },
+        issueType: { type: 'string', description: 'Task, Bug, or Story (default: Task)' },
+        priority: { type: 'string', description: 'Highest, High, Medium, Low, Lowest' },
+        assignee: { type: 'string', description: 'Jira account ID of the assignee' },
+        labels: { type: 'array', items: { type: 'string' }, description: 'Labels to add' }
+      },
+      required: ['summary', 'description']
+    },
+    execute: async (params) => {
+      if (!isJiraConfigured()) return 'Jira not configured.';
+      const draftId = `jira_${Date.now()}`;
+      const nsDir = path.join(BRAIN_PATH, 'brain', '01_EDMO');
+      await fs.ensureDir(nsDir);
+      await fs.writeJson(path.join(nsDir, `${draftId}.json`), params, { spaces: 2 });
+      await axios.post('https://slack.com/api/chat.postMessage', {
+        channel: AGENTS['01-edmobot']?.slackChannel || '#edmo',
+        text: `*Jira Draft:* ${params.summary}`,
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text: `*Draft Jira Issue:*\n*Summary:* ${params.summary}\n*Type:* ${params.issueType || 'Task'}\n*Description:*\n${(params.description || '').slice(0, 300)}${(params.description || '').length > 300 ? '...' : ''}` } },
+          { type: 'actions', elements: [
+            { type: 'button', text: { type: 'plain_text', text: 'Approve & Create' }, style: 'primary', value: draftId, action_id: 'jira_approve' },
+            { type: 'button', text: { type: 'plain_text', text: 'Discard' }, style: 'danger', value: draftId, action_id: 'jira_discard' }
+          ]}
+        ]
+      }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
+      return 'Draft created for approval in Slack. Do not assume it is created until user approves.';
     }
   },
   {
