@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(xargs:*)",
+      "Bash(cat:*)",
+      "Bash(wc:*)",
+      "Bash(git -C /Users/apple/Documents/HYDRA log --oneline -20)",
+      "Bash(grep:*)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(python3:*)"
+    ]
+  }
+}
