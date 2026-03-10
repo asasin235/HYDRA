@@ -1,0 +1,73 @@
+# HYDRA — Codex Project Configuration
+# Docs: https://developers.openai.com/codex/config-reference/
+
+# ─── Model Settings ───────────────────────────────────────────
+model = "o4-mini"
+model_reasoning_effort = "medium"
+model_reasoning_summary = "concise"
+
+# ─── Sandbox & Security ──────────────────────────────────────
+# workspace-write allows file modifications within the project
+# but blocks system-level changes
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+# Allow writing to brain directory and shared_context for tests
+writable_roots = ["~/hydra-brain", "./shared_context", "./logs"]
+# Enable network for API calls (OpenRouter, Slack, Redis, etc.)
+network_access = true
+
+# ─── Approval Policy ─────────────────────────────────────────
+# "on-request" means Codex will ask before running destructive commands
+approval_policy = "on-request"
+
+# ─── Shell Environment ───────────────────────────────────────
+allow_login_shell = true
+
+[shell_environment_policy]
+inherit = "all"
+
+[shell_environment_policy.set]
+NODE_ENV = "development"
+# Ensure Node.js uses the right binary on macOS
+PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+# ─── Features ─────────────────────────────────────────────────
+[features]
+shell_tool = true
+web_search = true
+unified_exec = true
+sqlite = true
+
+# ─── Web Search ───────────────────────────────────────────────
+web_search = "cached"
+
+# ─── Agent Settings ──────────────────────────────────────────
+[agents]
+max_threads = 4
+max_depth = 1
+
+# ─── AGENTS.md Discovery ─────────────────────────────────────
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
+
+# ─── History ──────────────────────────────────────────────────
+[history]
+persistence = "save-all"
+
+# ─── MCP Servers ──────────────────────────────────────────────
+# Linear MCP for issue tracking
+[mcp_servers.linear]
+command = "npx"
+enabled = true
+
+[mcp_servers.linear.env]
+LINEAR_API_KEY = "${LINEAR_API_KEY}"
+
+# Notion MCP for documentation
+[mcp_servers.notion]
+command = "npx"
+enabled = true
+
+[mcp_servers.notion.env]
+NOTION_API_KEY = "${NOTION_API_KEY}"

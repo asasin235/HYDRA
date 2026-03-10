@@ -1,0 +1,453 @@
+"Title","Description","Status","Priority","Labels"
+"Fix prompt drift — add promptLint() deduplication to auditor","The auditor's reflection system has caused severe prompt degradation across all agent prompts. Evidence: `prompts/00-architect.txt` has sentences repeated 6 times in a row (""Provide concrete evidence..."" and ""Ensure that all outputs are complete..."").
+
+**Requirements:**
+* Add a `promptLint(promptText)` function that detects and removes duplicate sentences/paragraphs before the auditor commits any reflection update
+* Before applying a reflection update in `agents/99-slack-gateway.js` `applyReflectionChanges()`, check for substring or cosine similarity match against existing prompt text
+* Add a max prompt size budget per agent (2000 tokens) — reject reflection updates that would exceed it
+* Log a warning when deduplication removes text: `log.warn('Removed N duplicate sentences from prompt')`
+
+**Files:** `agents/11-auditor.js`, `agents/99-slack-gateway.js` (lines 885-946)
+**Dependencies:** core/logger.js","Backlog","Urgent","ai"
+"Clean all 12 prompt files — remove existing duplicates and drift","Manually audit and clean all 12 prompt files in `prompts/` to remove duplicated text caused by the auditor's reflection system.
+
+**Requirements:**
+* Review each file in `prompts/*.txt` for repeated sentences, paragraphs, or instructions
+* Remove exact and near-exact duplicates while preserving the original intent
+* Consolidate multiple ""Reflection Update"" sections into a single coherent section per prompt
+* Verify each cleaned prompt is under 2000 tokens
+* Commit cleaned prompts with clear diff showing what was removed
+
+**Files:** All files in `prompts/*.txt` (12 files)
+**Dependencies:** None — this is a manual cleanup task","Backlog","High","ai"
+"Deprecate openclaw-memory.js — unify on LanceDB memory system","Two parallel memory systems exist. `00-architect.js` imports `readRecentContext`, `readTodayScreenActivity`, `readTodayAudioTranscripts` from `openclaw-memory.js` — a filesystem-based markdown store that duplicates what LanceDB already holds.
+
+**Requirements:**
+* Replace the 3 function calls in `agents/00-architect.js` with equivalent `searchAllContext()` calls from `core/memory.js`
+* Add `@deprecated` JSDoc annotations to all exports in `core/openclaw-memory.js`
+* Verify `scripts/ingest-context.js` is writing to the LanceDB `context_feed` table (it does — just confirm)
+* Update any other files that import from `core/openclaw-memory.js`
+* Remove openclaw-memory.js imports from `00-architect.js` morning/evening brief builders
+
+**Files:** `core/openclaw-memory.js`, `agents/00-architect.js`
+**Dependencies:** core/memory.js must have equivalent search functions","Backlog","High","pipeline"
+"Add embedding cache with LRU + TTL to core/memory.js","Every `searchMemory()`, `searchScreenContext()`, and `addMemory()` call hits OpenRouter for embeddings. The same queries (e.g., each agent's `contextQuery`) get re-embedded on every `run()`. The morning brief alone generates 10+ embedding requests.
+
+**Requirements:**
+* Install `lru-cache` npm package
+* Add an LRU cache in `core/memory.js` keyed on first 200 chars of the text being embedded
+* TTL: 6 hours for query embeddings, 24 hours for content embeddings
+* Max cache size: 1000 entries
+* Persist cache to `~/hydra-brain/brain/embedding_cache.json` on graceful shutdown (SIGTERM)
+* Reload cache from file on startup if it exists and is < 24 hours old
+* Log cache hit rate every hour: `log.info('Embedding cache hit rate: X%')`
+
+**Files:** `core/memory.js` (function `getEmbedding`)
+**Dependencies:** lru-cache (npm)","Backlog","High","pipeline, ai"
+"Encrypt SahibaBot namespace data (AES-256-GCM)","Relationship data (WhatsApp drafts, promises, date plans) stored in plaintext SQLite and backed up unencrypted to Google Drive. This is a privacy risk.
+
+**Requirements:**
+* Use Node.js `crypto.createCipheriv` with AES-256-GCM on the `03_SAHIBA` namespace
+* Encryption key derived from env variable `SAHIBA_ENCRYPTION_KEY`
+* Wrap `addConversationMessage` and `getRecentConversation` in `core/db.js` for the `03-sahibabot` namespace with encrypt/decrypt
+* Add `SENSITIVE: true` flag to the registry config for namespaces that should be excluded from Google Drive backup
+* Update `scripts/backup-gdrive.sh` to skip SENSITIVE namespaces
+* Add `SAHIBA_ENCRYPTION_KEY` to `sample.env` with generation instructions
+
+**Files:** `core/db.js`, `core/filesystem.js`, `agents/03-sahibabot.js`, `core/registry.js`, `sample.env`
+**Dependencies:** Node.js crypto (built-in)","Backlog","High","security"
+"Build core/proactive.js — proactive intelligence scheduler engine","Currently only Architect (morning/evening briefs) and Watchtower run proactively. The other 11 agents sit idle until asked via Slack. A chief of staff should anticipate needs.
+
+**Requirements:**
+* New `core/proactive.js` module with a `ProactiveEngine` class
+* Add a `proactiveChecks` array to each agent's registry config
+* Each check is an object: `{ name, cron, gatherFn, conditionFn, priority, channel }`
+* `gatherFn()` collects data (e.g., step count, spending today, calendar events)
+* `conditionFn(data)` returns true if the agent should fire (e.g., steps < 5000 by 3pm)
+* Only dispatches to `agent.run()` when the condition fires, with gathered data as context
+* Respects budget tiers — don't fire proactive checks if agent is budget-paused
+* Publishes `hydra:proactive.fired` bus event with agent name and check name
+* Start with 4 checks:
+  - **BioBot:** 3 PM step nudge (steps < 5000)
+  - **CFOBot:** daily spending velocity (> ₹500/day pace)
+  - **SahibaBot:** anniversary/date reminders from calendar (within 3 days)
+  - **EdmoBot:** standup reminder (no Jira update by 10 AM)
+
+**Files:** new `core/proactive.js`, `core/registry.js`, `ecosystem.config.cjs`
+**Dependencies:** node-cron, core/bus.js, core/bottleneck.js, core/db.js","Backlog","Urgent","ai, infra"
+"Implement intelligent model routing per request complexity","Every request uses the agent's fixed model regardless of complexity. Simple queries cost the same as complex multi-step analysis.
+
+**Requirements:**
+* Add `routeModel(userMessage, agentConfig)` function in `core/agent.js`
+* Classify complexity using heuristics:
+  - **Low:** message < 50 chars, no question marks, simple greetings/status checks → use `mistralai/mistral-small-3.2-24b-instruct`
+  - **Medium:** standard queries with single-topic focus → use agent's default model
+  - **High:** message > 200 chars OR contains keywords like 'analyze', 'compare', 'plan', 'strategy' OR requires tools → use agent's default or upgrade
+* Track per-complexity-tier token spend in SQLite for cost analysis
+* Add `modelRouting: true/false` flag in registry per agent (some agents should always use their assigned model)
+* Log routing decisions: `log.info('Routed to model X (complexity: low)', { agentName })`
+* Dashboard API: `GET /api/routing-stats` — show routing distribution
+
+**Files:** `core/agent.js`, `core/bottleneck.js`, `core/registry.js`, `scripts/dashboard.js`
+**Dependencies:** None","Backlog","High","ai, infra"
+"Build comprehensive test suite — core modules (Phase 1)","Only 3 smoke tests exist for a system that autonomously sends messages, creates tickets, controls appliances, and manages finances.
+
+**Requirements (Phase 1 — core modules):**
+* `tests/core/bottleneck.test.js` — budget enforcement logic, circuit breaker trip/reset, tier-based pausing, monthly reset, cost calculation
+* `tests/core/agent.test.js` — tool call loop with mock LLM, retry logic, context window truncation, conversation history injection, model routing
+* `tests/core/db.test.js` — all CRUD operations (agent_state, transactions, conversation_history, recording_briefs, action_items), schema init, parameterized queries
+* `tests/core/bus.test.js` — publish/subscribe, payload serialization, NR trace header injection, error handling on Redis disconnect
+* All tests must mock external services (OpenRouter, Slack, Redis, Jira, GitHub)
+* Use vitest `describe`/`it`/`expect` pattern
+* Target: >80% code coverage on core/ modules
+* Add `npm run test:coverage` script to package.json
+
+**Files:** `tests/core/*.test.js`, `vitest.config.js`, `package.json`
+**Dependencies:** vitest, @vitest/coverage-v8","Backlog","High","testing"
+"Build cross-agent workflow engine (core/workflow.js)","The Redis bus exists but only carries fire-and-forget events. No orchestration layer chains agents together for multi-step workflows.
+
+**Requirements:**
+* New `core/workflow.js` module with a `WorkflowEngine` class
+* Define workflows as JSON configuration:
+```json
+{
+  ""name"": ""meeting-to-tickets"",
+  ""trigger"": ""hydra:recording.triaged"",
+  ""condition"": ""payload.meetingType === 'work'"",
+  ""steps"": [
+    { ""agent"": ""01-edmobot"", ""action"": ""create_jira_tickets"", ""input"": ""payload.actionItems"" },
+    { ""agent"": ""00-architect"", ""action"": ""run"", ""input"": ""'Update priorities based on new meeting action items'"" }
+  ]
+}
+```
+* Steps execute sequentially; each step can transform/filter payload before passing to next
+* Error handling: if a step fails, log error, publish `hydra:workflow.error`, skip to next step
+* Implement 3 starter workflows:
+  - **meeting-to-tickets:** recording.triaged (work) → EdmoBot creates Jira tickets from action items
+  - **health-to-environment:** health.alert (low HRV) → Architect adjusts priorities + Jarvis adjusts room
+  - **spending-alert-cascade:** budget.warning → CFOBot detailed breakdown → Architect adjusts day plan
+* Dashboard page: `/workflows` showing active workflows, execution history, success/failure counts
+
+**Files:** new `core/workflow.js`, `core/bus.js`, `scripts/dashboard.js`
+**Dependencies:** core/bus.js, core/agent.js, core/registry.js","Backlog","High","ai, infra"
+"Build decision journal system in core/db.js","The system logs agent runs and transactions but has no concept of 'decisions.' When CFOBot flags an expense or the Auditor changes a prompt, there is no systematic way to review whether those decisions were good ones.
+
+**Requirements:**
+* New SQLite table `decisions`:
+  - `id INTEGER PRIMARY KEY AUTOINCREMENT`
+  - `agent TEXT NOT NULL` — which agent made/recommended the decision
+  - `category TEXT` — finance, health, work, relationship, system
+  - `decision_text TEXT NOT NULL` — what was decided
+  - `rationale TEXT` — why this decision was made
+  - `outcome TEXT` — what happened as a result (filled in later)
+  - `score INTEGER` — 1-5 rating (filled in during retrospective)
+  - `created_at TEXT DEFAULT (datetime('now'))`
+  - `reviewed_at TEXT` — when retrospective was done
+* Add `db.addDecision(agent, category, text, rationale)` function
+* Add `db.getUnreviewedDecisions(days)` — decisions not yet scored
+* Add `db.scoreDecision(id, outcome, score)` function
+* Auditor's weekly reflection includes a decision review pass over unscored decisions
+* Dashboard page: `/decisions` with table view, filters by agent/category, scoring interface
+
+**Files:** `core/db.js`, `agents/11-auditor.js`, `scripts/dashboard.js`
+**Dependencies:** None","Backlog","Medium","ai"
+"Build relationship CRM — contacts table + SocialBot enhancement","SahibaBot handles one relationship. SocialBot only drafts replies. Nobody tracks the full social graph across emails, WhatsApp, meetings, and audio.
+
+**Requirements:**
+* New SQLite table `contacts`:
+  - `id INTEGER PRIMARY KEY AUTOINCREMENT`
+  - `name TEXT NOT NULL`
+  - `platforms TEXT` — JSON array of platforms (email, whatsapp, slack, gchat)
+  - `last_contact TEXT` — ISO timestamp of last interaction
+  - `contact_count INTEGER DEFAULT 0`
+  - `topics TEXT` — JSON array of recent conversation topics
+  - `follow_ups TEXT` — JSON array of pending follow-up items
+  - `relationship_type TEXT` — professional, personal, family, freelance
+  - `created_at TEXT DEFAULT (datetime('now'))`
+  - `updated_at TEXT`
+* Add contact extraction to `scripts/gws-sync.js` — extract sender names from emails
+* Add contact extraction to `scripts/audio-triage.js` — feed `participants` into contacts table
+* SocialBot enhancement: surface ""You haven't talked to X in 30 days"", ""Y promised a proposal — follow up?""
+* Dashboard page: `/contacts` with contact list, last interaction, follow-up items
+
+**Files:** `core/db.js`, `agents/04-socialbot.js`, `scripts/audio-triage.js`, `scripts/gws-sync.js`, `scripts/dashboard.js`
+**Dependencies:** core/gws.js","Backlog","Medium","ai, pipeline"
+"Build meeting preparation automation","Calendar events are synced, audio triage extracts action items, email context exists in memory — but nothing stitches them into pre-meeting prep briefs.
+
+**Requirements:**
+* Add a proactive check (requires core/proactive.js) that triggers 30 minutes before each calendar event
+* Query workflow: attendee names → contacts CRM → recent emails/messages with them → open action items from past meetings
+* Generate structured prep brief:
+```
+📋 Meeting Prep: Sprint Planning with Team
+⏰ In 30 minutes (2:00 PM - 3:00 PM)
+
+👥 Attendees:
+- John (last talked: 2 days ago, topic: API redesign)
+- Sarah (last talked: 5 days ago, topic: hiring)
+
+📧 Recent threads:
+- ""Re: Q2 roadmap"" (3 emails, last: yesterday)
+- ""Sprint 41 retro notes"" (1 email, last: 3 days ago)
+
+✅ Open action items from last meeting:
+- [ ] Review PR #245 (assigned to you)
+- [ ] Send budget proposal to Sarah
+
+🎯 Suggested talking points:
+- Follow up on API redesign with John
+- Discuss hiring timeline with Sarah
+```
+* Post prep brief to `#00-architect` Slack channel
+* After meeting: cross-reference new audio triage results with prep brief for follow-up tracking
+
+**Files:** `core/proactive.js` (new check), `core/gws.js`, `agents/00-architect.js`
+**Dependencies:** core/proactive.js (#5), contacts CRM (#10), audio-triage","Backlog","Medium","ai"
+"Build goal tracking system with dashboard visualization","The Architect prompt mentions 3 macro goals (marriage, debt clearance, health) but there is no structured tracking beyond agent_state.
+
+**Requirements:**
+* New SQLite table `goals`:
+  - `id INTEGER PRIMARY KEY AUTOINCREMENT`
+  - `category TEXT NOT NULL` — finance, health, relationship, career
+  - `name TEXT NOT NULL` — e.g., ""Clear ₹12.5L debt""
+  - `target_value REAL` — numeric target
+  - `current_value REAL` — current progress
+  - `unit TEXT` — rupees, kg, days, count
+  - `deadline TEXT` — ISO date
+  - `milestones TEXT` — JSON array of milestone objects
+  - `created_at TEXT DEFAULT (datetime('now'))`
+  - `updated_at TEXT`
+* Seed with 3 goals: debt clearance (₹12.5L by Oct 2027), wedding fund, health (weight target)
+* Architect evening summary auto-updates goal progress from CFOBot (debt), BioBot (health)
+* Dashboard page: `/goals` with visual progress bars, milestone markers, deadline countdown
+* Weekly goal review in auditor reflection: ""Debt payoff is X% ahead/behind schedule""
+
+**Files:** `core/db.js`, `agents/00-architect.js`, `agents/11-auditor.js`, `scripts/dashboard.js`
+**Dependencies:** None","Backlog","Medium","ai, dashboard"
+"Build time blocking and deep work protection system","The system interrupts equally whether the user is in a 1:1 meeting or deep coding flow. Notifications should be context-aware.
+
+**Requirements:**
+* New `agent_state` key: `system.mode` with values: `normal`, `deep_work`, `meeting`, `sleep`
+* Mode transitions triggered by:
+  - Calendar events (automatic: meeting start/end)
+  - Slack command: `@hydra mode deep_work` / `@hydra mode normal`
+  - Jarvis automation: `@hydra jarvis sleep mode`
+* In `deep_work` mode:
+  - Non-urgent Slack messages queue in SQLite `message_queue` table instead of posting
+  - Only `Urgent` priority proactive checks fire
+  - BioBot delays non-critical health nudges
+* In `meeting` mode:
+  - Queue all non-urgent messages
+  - Audio triage runs with higher priority
+* Queue flush: when mode returns to `normal`, post queued messages as a digest
+* Slack gateway checks mode before posting: `if (mode === 'deep_work' && !isUrgent) { queue(message) }`
+* Dashboard indicator: show current mode in header bar
+
+**Files:** `core/db.js`, `agents/99-slack-gateway.js`, `scripts/dashboard.js`
+**Dependencies:** core/proactive.js (for calendar-based triggers)","Backlog","Medium","ai, infra"
+"Build habit formation tracker with streaks","BioBot's prompt mentions quit tracking for smoking/weed but there is no structured habit storage. Streaks and milestones are powerful motivators.
+
+**Requirements:**
+* New SQLite table `habits`:
+  - `id INTEGER PRIMARY KEY AUTOINCREMENT`
+  - `name TEXT NOT NULL` — e.g., ""No smoking"", ""10K steps"", ""Meditation""
+  - `category TEXT` — health, productivity, personal
+  - `streak_current INTEGER DEFAULT 0`
+  - `streak_best INTEGER DEFAULT 0`
+  - `last_completed TEXT` — ISO date
+  - `total_completions INTEGER DEFAULT 0`
+  - `frequency TEXT DEFAULT 'daily'` — daily, weekly
+  - `auto_track INTEGER DEFAULT 0` — 1 if can be auto-tracked via Apple Health
+  - `created_at TEXT DEFAULT (datetime('now'))`
+* Auto-mark habits from Apple Health data (steps > 10K, sleep > 7h) via health-sync
+* Manual check-in via Slack: `@hydra biobot habit meditation done`
+* Morning brief includes habit status: current streaks, milestones approaching
+* Streak milestones trigger celebration messages (7 days, 30 days, 100 days)
+* Dashboard page: `/habits` with streak calendar heatmap, milestone badges
+
+**Files:** `core/db.js`, `agents/07-biobot.js`, `scripts/health-sync.js`, `agents/00-architect.js`, `scripts/dashboard.js`
+**Dependencies:** health-sync.js","Backlog","Low","ai, dashboard"
+"Implement pattern learning from user behavior","No agent analyzes recurring patterns in user behavior across screen activity, transactions, and calendar.
+
+**Requirements:**
+* New weekly batch job `scripts/pattern-analyzer.js` running Sundays at 8 PM
+* Analyzes last 7 days of: screen activity summaries, transaction data, calendar events, habit completions
+* Uses LLM (Mistral Small, cheapest) to identify patterns:
+  - Temporal: ""Works late on Wednesdays"", ""Orders food after 11 PM on Fridays""
+  - Behavioral: ""Checks LinkedIn every morning"", ""Skips gym on meeting-heavy days""
+  - Financial: ""Spends more on weekends"", ""UPI payments spike after payday""
+* Store patterns in `agent_state` as JSON: `{pattern, days, confidence, first_seen, last_seen}`
+* Inject relevant patterns into agent system prompts as ""Known Behavioral Patterns"" section
+* Auditor reviews and prunes patterns during weekly reflection (remove low-confidence or stale)
+* CFOBot can pre-warn about predicted spending; BioBot can adjust step goals
+
+**Files:** new `scripts/pattern-analyzer.js`, `core/agent.js`, `agents/11-auditor.js`, `ecosystem.config.cjs`
+**Dependencies:** core/memory.js, core/db.js","Backlog","Medium","ai, research"
+"Integrate Wolf with live NSE market data API","Wolf's F&O analysis uses Perplexity for market 'data' — all analysis is LLM-inferred, not actual prices. Paper trades are based on hallucinated quotes.
+
+**Requirements:**
+* New `core/market-data.js` module with functions:
+  - `getOptionChain(symbol)` — returns puts/calls with strike prices, premiums, OI, volume
+  - `getLTP(symbol)` — returns last traded price for equity/index
+  - `getHistorical(symbol, range)` — returns OHLCV candles
+  - `getNiftyExpiry()` — returns next expiry date
+* Data source: NSE India unofficial API or Zerodha Kite Connect (free tier) or Upstox API
+* Add these as tools to Wolf's tool set in the gateway
+* Update paper trade recording in `core/db.js` `paper_trades` table to store actual API prices instead of LLM-inferred values
+* Rate limiting: max 5 requests/second to avoid IP blocks
+* Cache option chain data for 5 minutes (refresh on explicit request)
+
+**Files:** new `core/market-data.js`, `agents/09-wolf.js`, `agents/99-slack-gateway.js`, `core/db.js`
+**Dependencies:** axios (for API calls)
+**Env vars:** `NSE_API_URL` or `KITE_API_KEY`, `KITE_API_SECRET`","Backlog","Medium","ai, pipeline"
+"Build email management automation — intelligent triage","Email tools exist for EdmoBot and SocialBot but there is no intelligent triage layer. No automatic categorization or priority surfacing.
+
+**Requirements:**
+* Add LLM classification step to `scripts/gws-sync.js` during email sync:
+  - Categories: `action_required`, `fyi`, `promotional`, `automated`, `spam`
+  - Priority: `urgent`, `normal`, `low`
+* Store classification in new SQLite table `email_triage`:
+  - `id, message_id, profile, sender, subject, category, priority, created_at, actioned_at`
+* Daily email digest posted to relevant Slack channel:
+```
+📧 Email Digest (last 24h):
+🔴 Action Required (3): [subject1], [subject2], [subject3]
+📋 FYI (12): [grouped by sender]
+🗑️ Promotional (5): auto-archived
+```
+* Auto-draft acknowledgment responses for FYI emails (save as drafts, don't send)
+* Surface action-required emails in Architect's morning brief
+* Dashboard page: `/email` with triage overview, category breakdown, action buttons
+
+**Files:** `scripts/gws-sync.js`, `core/gws.js`, `core/db.js`, `agents/00-architect.js`, `scripts/dashboard.js`
+**Dependencies:** core/gws.js, core/memory.js","Backlog","Medium","ai, pipeline"
+"Add Telegram bot interface via Hermes bridge","Slack mobile is heavy and notification-noisy. A lightweight Telegram bot gives focused push-notification-driven access to HYDRA on the go.
+
+**Requirements:**
+* Leverage existing `core/hermes-bridge.js` Telegram support
+* Add a Telegram message handler in `agents/99-slack-gateway.js` that mirrors Slack dispatch:
+  - Same `hydra <agent> <message>` syntax
+  - Route to same agent.run() pipeline
+  - Format responses for Telegram markdown
+* Support Telegram inline keyboards for approve/reject flows:
+  - SocialBot draft approvals
+  - Auditor reflection approvals
+  - Proactive check acknowledgments
+* Add `/status` command in Telegram showing agent health grid
+* Notification routing: urgent alerts go to both Slack and Telegram; normal messages Slack only
+
+**Files:** `core/hermes-bridge.js`, `agents/99-slack-gateway.js`
+**Dependencies:** Hermes gateway (external)
+**Env vars:** `TELEGRAM_BOT_TOKEN`","Backlog","Low","infra"
+"Implement semantic memory deduplication","Every `agent.run()` adds a memory entry to LanceDB. Many are near-duplicates that crowd out distinct memories and slow searches.
+
+**Requirements:**
+* Before inserting a new memory in `core/memory.js` `addMemory()`:
+  - Search for top-1 most similar existing memory
+  - If cosine similarity > 0.95, update existing memory's timestamp instead of inserting
+  - Log: `log.debug('Skipped duplicate memory (similarity: 0.97)', { text: first50chars })`
+* Weekly batch job in `scripts/memory-gc.js` (Sunday 3 AM):
+  - Scan all memory tables for pairs with similarity > 0.90
+  - Merge by keeping the more recent entry, updating its count
+  - Delete the older duplicate
+  - Report: `Merged N duplicate memories, freed M entries`
+* Track memory table sizes in Watchtower health checks
+* Dashboard metric: memory table row counts + dedup rate
+
+**Files:** `core/memory.js`, new `scripts/memory-gc.js`, `ecosystem.config.cjs`
+**Dependencies:** core/memory.js (embedding cache should be built first for efficiency)","Backlog","Low","pipeline"
+"Add response caching for repeated LLM queries","Repeated identical questions cost full token price each time. Common queries like 'how much did I spend today' are asked multiple times daily.
+
+**Requirements:**
+* Before calling `openai.chat.completions.create()` in `core/agent.js`:
+  - Hash the user message + truncated context (first 500 chars) to produce a cache key
+  - Check Redis for cached response with key prefix `hydra:cache:`
+  - If cache hit and response is < 15 minutes old, return cached response
+* Only cache non-tool-call responses (tool calls have side effects and must not be cached)
+* TTL: 15 minutes for most agents, 5 minutes for CFOBot (financial data changes fast)
+* Log cache hits: `log.info('Cache hit for agent query', { agentName, cacheAge })`
+* Add cache stats to dashboard: hit rate, entries count, estimated savings
+
+**Files:** `core/agent.js`, `core/bus.js` (Redis connection)
+**Dependencies:** ioredis (already installed)","Backlog","Low","ai, infra"
+"Build document knowledge base ingestion pipeline","Important documents (contracts, tax papers, learning materials) are not in the memory system. Agents cannot answer questions about them.
+
+**Requirements:**
+* New `scripts/doc-ingest.js` pipeline watching `~/hydra-brain/documents/` folder
+* Supported formats: PDF (via pdf-parse), plain text, markdown
+* Processing pipeline:
+  - Detect file type by extension
+  - Extract text content
+  - Chunk into 512-token segments with 50-token overlap
+  - Embed via `core/memory.js` `getEmbedding()`
+  - Write to LanceDB `context_feed` table with `source_type: 'document'`
+* Deduplication: track ingested files by path + hash in SQLite `ingested_documents` table
+* Skip already-ingested files (idempotent)
+* PM2 process: `doc-ingest`, watching mode via chokidar
+* Support manual re-ingestion: `node scripts/doc-ingest.js --file path/to/doc.pdf`
+
+**Files:** new `scripts/doc-ingest.js`, `ecosystem.config.cjs`
+**Dependencies:** pdf-parse (npm), chokidar, core/memory.js","Backlog","Low","pipeline"
+"Build BrandBot content calendar with auto-posting workflow","BrandBot has a creative temperature (0.75) optimized for content generation but never runs autonomously. No proactive personal branding.
+
+**Requirements:**
+* Weekly cron (Friday 6 PM): BrandBot analyzes the week's:
+  - GitHub contributions (PRs merged, code reviews)
+  - Jira tickets completed
+  - Audio triage work-related recordings
+  - Any notable achievements from Architect logs
+* Generates 2-3 draft LinkedIn/Twitter posts with:
+  - Professional tone, technical depth
+  - Relevant hashtags
+  - 1-2 sentence hook + 3-4 sentence body
+* Saves drafts to `agent_state` with status `draft`
+* Posts drafts to `#02-brandbot` Slack channel with approve/edit/discard buttons
+* On approval: either post directly to LinkedIn (via LinkedIn API) or save final text for manual posting
+* Track posting frequency and engagement (manual input) in SQLite `content_posts` table
+
+**Files:** `agents/02-brandbot.js`, `agents/99-slack-gateway.js`, `core/db.js`
+**Dependencies:** core/github.js, core/jira.js","Backlog","Low","ai"
+"Replace file-based agent eviction with Redis bus hot-reload","The current agent eviction mechanism checks `EVICT_FILE` timestamps in the gateway — it is fragile and races with concurrent requests.
+
+**Requirements:**
+* Add new Redis bus event: `hydra:agent.reconfigure`
+* Payload: `{ agentName, reason, timestamp }`
+* Gateway subscribes to the event and atomically replaces the cached agent instance
+* Dashboard `POST /api/agent/{name}/model` and `POST /api/agent/{name}/config` publish the bus event instead of writing an evict file
+* Add a version counter to agent instances to detect stale references during concurrent requests
+* Remove the EVICT_FILE polling logic from `agents/99-slack-gateway.js` (lines 698-709)
+
+**Files:** `agents/99-slack-gateway.js`, `core/bus.js`, `scripts/dashboard.js`
+**Dependencies:** core/bus.js (Redis)","Backlog","Low","infra"
+"Add backup verification and automated restore testing","The backup script runs daily at 2 AM but there is no verification that backups are valid or that restores work.
+
+**Requirements:**
+* After each backup completes in `scripts/backup-gdrive.sh`:
+  - Download the latest backup file from Google Drive
+  - Verify file integrity via SHA256 checksum comparison
+  - Verify SQLite backup opens correctly: `sqlite3 backup.db 'SELECT count(*) FROM agent_state'`
+  - Log verification result and post to Slack
+* Monthly automated restore test (1st of month, 4 AM):
+  - Download latest backup to temp directory
+  - Restore SQLite DB and verify table counts match production
+  - Report discrepancies to `#hydra-alerts`
+* Watchtower alert if backup has not completed in 24 hours
+* Track backup sizes over time (sudden drops indicate data loss)
+
+**Files:** `scripts/backup-gdrive.sh`, `scripts/watchdog.js`
+**Dependencies:** Google Drive CLI (rclone), sqlite3","Backlog","Low","infra"
+"Create proper agents/07-biobot.js with proactive health monitoring","BioBot currently has a prompt but no dedicated agent file with cron-driven health checks. It only responds when asked.
+
+**Requirements:**
+* Create `agents/07-biobot.js` with cron schedules:
+  - 6:30 AM: morning readiness check (sleep quality from Apple Health)
+  - 3:00 PM: afternoon step check (steps < 5000 → nudge)
+  - 9:00 PM: evening health summary (steps, active calories, HRV if available)
+* Read Apple Health data from brain directory written by `scripts/health-sync.js`
+* Check screen context for stress indicators (keywords: deadline, urgent, behind schedule)
+* Craving intervention: if screen shows food delivery apps + time > 10 PM → send healthy alternative suggestion
+* Post proactive nudges to `#07-biobot` Slack channel
+* Respect system mode: suppress non-urgent nudges in `deep_work` and `meeting` modes
+
+**Files:** new `agents/07-biobot.js`, `ecosystem.config.cjs`
+**Dependencies:** core/proactive.js, scripts/health-sync.js, core/memory.js","Backlog","Medium","ai"
