@@ -118,6 +118,17 @@ async function commentOnTicketTool({ ticket_key, comment }) {
   return `✅ Comment added to ${ticket_key}`;
 }
 
+async function createJiraTicketTool({ summary, description, issueType = 'Task', priority, assignee, labels }) {
+  if (!isJiraConfigured()) return 'Jira not configured.';
+  const params = { summary, description, issueType };
+  if (priority) params.priority = priority;
+  if (assignee) params.assignee = assignee;
+  if (labels) params.labels = labels;
+  const result = await createJiraIssue(params);
+  const url = `${process.env.JIRA_BASE_URL}/browse/${result.key}`;
+  return `✅ Jira ticket created: *${result.key}* — <${url}|${result.key}>\nSummary: ${summary}`;
+}
+
 async function draftJiraIssueTool(params) {
   if (!isJiraConfigured()) return 'Jira not configured.';
   const draftId = `jira_${Date.now()}`;
@@ -281,8 +292,25 @@ const edmo = new Agent({
       execute: commentOnTicketTool
     },
     {
+      name: 'create_jira_ticket',
+      description: 'Create a new Jira ticket immediately. Use this to create Tasks, Bugs, or Stories in Jira.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'Ticket title/summary' },
+          description: { type: 'string', description: 'Detailed description of the ticket' },
+          issueType: { type: 'string', description: 'Task, Bug, or Story (default: Task)', enum: ['Task', 'Bug', 'Story'] },
+          priority: { type: 'string', description: 'Priority: Highest, High, Medium, Low, Lowest (optional)' },
+          assignee: { type: 'string', description: 'Assignee account ID or email (optional)' },
+          labels: { type: 'array', items: { type: 'string' }, description: 'Labels to apply (optional)' }
+        },
+        required: ['summary', 'description']
+      },
+      execute: createJiraTicketTool
+    },
+    {
       name: 'draft_jira_issue',
-      description: 'Draft a new Jira issue for Slack approval before creation.',
+      description: 'Draft a new Jira issue and send to Slack for approval before creation. Use this when you want human review before creating the ticket.',
       parameters: {
         type: 'object',
         properties: {

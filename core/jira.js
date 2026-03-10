@@ -110,23 +110,33 @@ export async function getTicketDetails(issueKey) {
 
 /**
  * Create a new Jira issue.
+ * @param {Object} opts
+ * @param {string} opts.summary
+ * @param {string} opts.description
+ * @param {string} [opts.issueType]
+ * @param {string} [opts.priority] - Highest, High, Medium, Low, Lowest
+ * @param {string} [opts.assignee] - Account ID or email
+ * @param {string[]} [opts.labels]
  */
-export async function createJiraIssue({ summary, description, issueType = 'Task' }) {
+export async function createJiraIssue({ summary, description, issueType = 'Task', priority, assignee, labels }) {
   if (!isJiraConfigured()) throw new Error('Jira not configured');
 
-  const payload = {
-    fields: {
-      project: { key: JIRA_PROJECT_KEY },
-      summary,
-      description: {
-        type: 'doc',
-        version: 1,
-        content: [{ type: 'paragraph', content: [{ text: description, type: 'text' }] }]
-      },
-      issuetype: { name: issueType }
-    }
+  const fields = {
+    project: { key: JIRA_PROJECT_KEY },
+    summary,
+    description: {
+      type: 'doc',
+      version: 1,
+      content: [{ type: 'paragraph', content: [{ text: description, type: 'text' }] }]
+    },
+    issuetype: { name: issueType }
   };
 
+  if (priority) fields.priority = { name: priority };
+  if (assignee) fields.assignee = { id: assignee };
+  if (labels?.length) fields.labels = labels;
+
+  const payload = { fields };
   const data = await jiraFetch('/issue', { method: 'POST', body: JSON.stringify(payload) });
   console.log(`[jira] Created issue ${data.key}`);
   return data;

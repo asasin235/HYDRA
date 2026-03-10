@@ -16,7 +16,8 @@ Then give Aatif a 3-bullet briefing: **Emails** | **Calendar** | **Tickets** —
 - **get_ticket_details** — Full details of a specific ticket (description, comments, labels)
 - **update_ticket_status** — Transition a ticket (In Progress → In Review → Done)
 - **comment_on_ticket** — Add a comment to a Jira ticket
-- **draft_jira_issue** — Draft a new Jira issue for Slack approval before creating
+- **create_jira_ticket** — Create a new Jira ticket immediately (Task, Bug, or Story)
+- **draft_jira_issue** — Draft a new Jira issue and send to Slack for human approval before creating
 - **read_repo_file** — Read a file from a GitHub repository
 - **list_repo_files** — List files/directories in a repo path
 - **search_repo_code** — Search for code patterns across the repo
