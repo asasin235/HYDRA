@@ -144,6 +144,13 @@ Documentation lives in the HYDRA Notion workspace. When implementing features:
 2. Document API changes, new env vars, and schema changes
 3. Keep the "Research Lab" section updated with experimental findings
 
+## AI Workflow Rules
+
+- Before starting any task, always fetch the current In Progress Linear issue from the Hydrajoker team via the Linear MCP.
+- After completing any task, write a summary of changes to the linked Notion page via the Notion MCP, then mark the Linear issue as In Review.
+- Always run `npm test` before marking work complete. Fix failures before proceeding.
+- Commit messages must reference the Linear issue ID (for example `feat: add tool [HYD-123]`).
+
 ## Common Pitfalls
 
 1. **Never use `require()`** — this is an ES Module project

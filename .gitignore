@@ -21,11 +21,11 @@ brain/
 # Backup files
 *.bak
 
-# Claude Code config
-.claude/
-
 # PM2
 .pm2/
+
+# Claude local machine config
+.claude/settings.local.json
 
 # OS files
 .DS_Store

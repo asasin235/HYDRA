@@ -32,3 +32,9 @@ HYDRA is a multi-agent AI personal operating system running on Node.js and PM2, 
 - Call out risk when editing shared infrastructure.
 - Keep commit intent concrete and implementation-friendly.
 - Ensure docs and tracking stay aligned with major code changes.
+
+## AI Workflow Rules
+- Before starting any task, always fetch the current In Progress Linear issue from the Hydrajoker team via the Linear MCP.
+- After completing any task, write a summary of changes to the linked Notion page via the Notion MCP, then mark the Linear issue as In Review.
+- Always run `npm test` before marking work complete. Fix failures before proceeding.
+- Commit messages must reference the Linear issue ID (for example `feat: add tool [HYD-123]`).
