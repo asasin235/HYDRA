@@ -29,8 +29,10 @@ import { detectTags } from './audio-tagger.js';
 import { enqueueForReview } from '../core/review-queue-db.js';
 import { storeRawTranscript, storeNormalizedSummary } from '../core/transcript-store.js';
 import { detectLanguage } from '../core/language-detector.js';
+import { createLogger } from '../core/logger.js';
 
 const execFileAsync = promisify(execFile);
+const log = createLogger('ingest-audio');
 
 const AUDIO_INBOX = (process.env.AUDIO_INBOX_DIR || '~/hydra-brain/audio_inbox')
     .replace(/^~/, process.env.HOME);
@@ -49,7 +51,7 @@ const MAX_FILE_SIZE_MB = 25;
  * Transcribe audio via local whisper.cpp binary
  */
 async function transcribeLocal(filePath) {
-    console.log(`[ingest-audio] 🎙️  Transcribing with whisper.cpp: ${path.basename(filePath)}`);
+    log.info(`Transcribing with whisper.cpp: ${path.basename(filePath)}`);
 
     const { stderr } = await execFileAsync(WHISPER_CPP_PATH, [
         '-m', WHISPER_MODEL_PATH,
@@ -90,14 +92,14 @@ async function summarizeLocal(transcript) {
         });
 
         if (!response.ok) {
-            console.warn(`[ingest-audio] Ollama returned ${response.status}, using fallback summary`);
+            log.warn(`Ollama returned ${response.status}, using fallback summary`);
             return transcript.slice(0, 200) + '...';
         }
 
         const data = await response.json();
         return data.response?.trim() || transcript.slice(0, 200) + '...';
     } catch (e) {
-        console.warn(`[ingest-audio] Ollama not available (${e.message}), using fallback summary`);
+        log.warn(`Ollama not available (${e.message}), using fallback summary`);
         return transcript.slice(0, 200) + '...';
     }
 }
@@ -111,7 +113,7 @@ async function checkSidecarMarkdown(audioPath) {
     if (await fs.pathExists(mdPath)) {
         const content = await fs.readFile(mdPath, 'utf-8');
         if (content.length > 50) {
-            console.log(`[ingest-audio] 📄 Found .md sidecar from plaud-sync`);
+            log.debug('Found .md sidecar from plaud-sync');
             return { mdPath, content };
         }
     }
@@ -149,10 +151,10 @@ async function processAudioFile(filePath) {
     const stat = await fs.stat(filePath);
     const sizeMB = stat.size / (1024 * 1024);
 
-    console.log(`[ingest-audio] Processing: ${filename} (${sizeMB.toFixed(1)}MB)`);
+    log.info(`Processing: ${filename} (${sizeMB.toFixed(1)}MB)`);
 
     if (sizeMB > MAX_FILE_SIZE_MB) {
-        console.warn(`[ingest-audio] ${filename} exceeds ${MAX_FILE_SIZE_MB}MB, skipping`);
+        log.warn(`${filename} exceeds ${MAX_FILE_SIZE_MB}MB, skipping`);
         return;
     }
 
@@ -173,7 +175,7 @@ async function processAudioFile(filePath) {
             }
 
             if (!transcript || transcript.length < 10) {
-                console.warn(`[ingest-audio] ${filename}: empty transcript, skipping`);
+                log.warn(`${filename}: empty transcript, skipping`);
                 return;
             }
 
@@ -182,7 +184,7 @@ async function processAudioFile(filePath) {
 
         // Detect language (en, hi, mixed-hi-en, unknown)
         const language = detectLanguage(transcript);
-        console.log(`[ingest-audio] Detected language: ${language}`);
+        log.debug(`Detected language: ${language}`);
 
         // Extract tags for metadata (preserved for review context)
         let metadata = {};
@@ -220,7 +222,7 @@ async function processAudioFile(filePath) {
         // Store normalized summary (interpretation layer, separate from evidence)
         storeNormalizedSummary(transcriptId, summary);
 
-        console.log(`[ingest-audio] 📋 ${filename} → enqueued for review (queue: ${reviewQueueId}, transcript: ${transcriptId})`);
+        log.info(`${filename} → enqueued for review`, { reviewQueueId, transcriptId });
 
         // Move to processed
         await fs.ensureDir(PROCESSED_DIR);
@@ -235,9 +237,9 @@ async function processAudioFile(filePath) {
             }
         }
 
-        console.log(`[ingest-audio] ✅ ${filename} → transcribed + queued for human review`);
+        log.info(`${filename} → transcribed + queued for human review`);
     } catch (e) {
-        console.error(`[ingest-audio] ❌ ${filename}: ${e.message}`);
+        log.error(`${filename}: ${e.message}`);
     }
 }
 
@@ -255,21 +257,21 @@ async function scan() {
 
         if (audioFiles.length === 0) return;
 
-        console.log(`[ingest-audio] Found ${audioFiles.length} audio file(s)`);
+        log.info(`Found ${audioFiles.length} audio file(s)`);
         for (const f of audioFiles) {
             await processAudioFile(path.join(AUDIO_INBOX, f));
         }
     } catch (e) {
-        console.error('[ingest-audio] scan error:', e.message);
+        log.error('scan error', { error: e.message });
     }
 }
 
 // ── Main Loop ─────────────────────────────────────────────────────────────────
 
-console.log(`[ingest-audio] Watching ${AUDIO_INBOX} (poll every ${POLL_INTERVAL / 1000}s)`);
-console.log(`[ingest-audio] Mode: local (whisper.cpp + Ollama ${OLLAMA_MODEL})`);
-console.log(`[ingest-audio] Pipeline: transcribe → summarize → review queue (human review required)`);
-console.log(`[ingest-audio] Whisper binary: ${WHISPER_CPP_PATH}`);
-console.log(`[ingest-audio] Whisper model: ${WHISPER_MODEL_PATH}`);
+log.info(`Watching ${AUDIO_INBOX} (poll every ${POLL_INTERVAL / 1000}s)`);
+log.info(`Mode: local (whisper.cpp + Ollama ${OLLAMA_MODEL})`);
+log.info('Pipeline: transcribe → summarize → review queue (human review required)');
+log.info(`Whisper binary: ${WHISPER_CPP_PATH}`);
+log.info(`Whisper model: ${WHISPER_MODEL_PATH}`);
 scan();
 setInterval(scan, POLL_INTERVAL);
