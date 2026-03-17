@@ -7,7 +7,7 @@ import { validateEnv } from '../core/validate-env.js';
 import Agent from '../core/agent.js';
 import { getLogs, getDebt, setState, listRecordingBriefs, listActionItems, getProjectSummary } from '../core/db.js';
 import { readBrain } from '../core/filesystem.js';
-import { getMonthlySpend, getTodaySpend } from '../core/bottleneck.js';
+import { getMonthlySpend, getTodaySpend, getWeeklySpend } from '../core/bottleneck.js';
 import { AGENT_NAMES, AGENT_NAMESPACES } from '../core/registry.js';
 import { readRecentContext, readTodayScreenActivity, readTodayAudioTranscripts } from '../core/openclaw-memory.js';
 import { getMessages } from '../core/hermes-bridge.js';
@@ -67,6 +67,30 @@ async function gatherTodaySummaries() {
     }
   }
   return sections.join('\n\n');
+}
+
+async function gatherWeekLogs() {
+  const sections = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(Date.now() - i * 86400000).toISOString().split('T')[0];
+    const filename = `daily_log_${d}.json`;
+    for (const a of AGENTS) {
+      try {
+        const ns = AGENT_NAMESPACES[a];
+        if (!ns) continue;
+        const entries = await readBrain(ns, filename);
+        if (!Array.isArray(entries) || entries.length === 0) continue;
+        const summaries = entries.map(e => {
+          const tokens = (e.usage?.inputTokens || 0) + (e.usage?.outputTokens || 0);
+          return `  [${d}] (${tokens} tok) ${(e.response || '').slice(0, 150)}`;
+        });
+        sections.push(`**${a}** — ${d} (${entries.length} runs):\n${summaries.join('\n')}`);
+      } catch (e) {
+        // skip missing files silently
+      }
+    }
+  }
+  return sections.join('\n\n') || '(no logs found for the past 7 days)';
 }
 
 async function buildMorningBrief() {
@@ -172,6 +196,115 @@ async function buildEveningSummary() {
   }
 }
 
+// ─── Phase 5: Weekly Memory Digest ───────────────────────────────────────────
+// Runs every Sunday at 9:00 PM.
+// Summarises the past 7 days across all agents: memory facts, recordings,
+// token spend, macro-goal alignment, and one directive for the week ahead.
+async function buildWeeklyMemoryDigest() {
+  try {
+    const weekLogs = await gatherWeekLogs();
+
+    // Week token spend per agent
+    let weekSpendCtx = '';
+    try {
+      if (typeof getWeeklySpend === 'function') {
+        const perAgent = await Promise.all(AGENTS.map(async (a) => ({ name: a, ...(await getWeeklySpend(a)) })));
+        const totalWeek = perAgent.reduce((s, x) => s + (x.cost || 0), 0);
+        weekSpendCtx = `Weekly token spend total: $${totalWeek.toFixed(4)}\n` +
+          perAgent.map(a => `• ${a.name}: $${(a.cost || 0).toFixed(4)}`).join('\n');
+      }
+    } catch (e) {
+      console.error('[00-architect] weekly spend error:', e.message);
+    }
+
+    // Debt snapshot
+    const debt = getDebt();
+    const debtCtx = `Debt snapshot: debt=₹${(debt?.debt || 0).toFixed(0)} paid=₹${(debt?.paid || 0).toFixed(0)} wedding_fund=₹${(debt?.wedding_fund || 0).toFixed(0)}`;
+
+    // Recording intelligence for the past 7 days
+    let recordingCtx = '';
+    try {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+      const weekBriefs = listRecordingBriefs({ since: sevenDaysAgo, limit: 50 });
+      const meaningful = weekBriefs.filter(b => b.one_line && !b.one_line.includes('unintelligible') && !b.one_line.includes('noise'));
+      if (meaningful.length) {
+        recordingCtx = 'Recordings this week:\n' + meaningful.map(b => {
+          const actions = (typeof b.action_items_json === 'string' ? JSON.parse(b.action_items_json) : b.action_items_json) || [];
+          const actStr = actions.length ? actions.map(a => `  → ${typeof a === 'string' ? a : a.task}`).join('\n') : '';
+          return `• [${b.project}/${b.meeting_type}] ${b.one_line}${actStr ? '\n' + actStr : ''}`;
+        }).join('\n');
+      }
+      const openActions = listActionItems({ status: 'open', limit: 20 });
+      if (openActions.length) {
+        recordingCtx += '\n\nStill-open action items:\n' + openActions.map(a =>
+          `• [${a.project}] ${a.task}${a.owner ? ' (@' + a.owner + ')' : ''}${a.due_date ? ' due ' + a.due_date : ''}`
+        ).join('\n');
+      }
+    } catch (e) {
+      console.error('[00-architect] weekly recording context error:', e.message);
+    }
+
+    // Recent audio/notes context (wider window)
+    let audioCtx = '';
+    let notesCtx = '';
+    try {
+      audioCtx = await readRecentContext('audio', 7);
+      notesCtx = await readRecentContext('notes', 7);
+    } catch (e) {
+      console.error('[00-architect] weekly context read error:', e.message);
+    }
+
+    const context = [
+      '=== WEEKLY MEMORY DIGEST — CONTEXT ===',
+      debtCtx,
+      weekSpendCtx,
+      '\nAgent logs (past 7 days):',
+      weekLogs,
+      audioCtx ? `\nAudio / Call Notes (past 7 days):\n${audioCtx.slice(0, 3000)}` : '',
+      notesCtx ? `\nAgent Notes (past 7 days):\n${notesCtx.slice(0, 2000)}` : '',
+      recordingCtx ? `\n${recordingCtx.slice(0, 4000)}` : ''
+    ].filter(Boolean).join('\n');
+
+    const prompt = `Generate the Phase 5 Weekly Memory Digest for HYDRA.
+
+Structure your output exactly as follows:
+
+*📅 Weekly Memory Digest — Week of ${today()}*
+
+*🧠 Top Interactions Reviewed*
+• List the most significant conversations, recordings, or events processed this week.
+
+*📌 Memory Facts Extracted*
+• Key facts, decisions, or tasks that were written to memory this week.
+
+*🎯 Macro-Goal Alignment Scores*
+• Marriage (Sabiha, Oct 2027): X/10 — one sentence rationale
+• Debt clearance (₹12.5L): X/10 — one sentence rationale
+• Physical / Mental Health: X/10 — one sentence rationale
+
+*🔁 Recurring Patterns*
+• Habits, blockers, or behaviours worth flagging from this week.
+
+*➡️ Next Week's Single Focus*
+One clear directive. No hedging.
+
+Be ruthless but fair. Use concrete data from the logs above.`;
+
+    const msg = await architect.run(prompt, context);
+    await postSlack(msg);
+
+    // Persist digest summary to state
+    setState('00-architect', 'weekly_digest', {
+      week_ending: today(),
+      generated_at: new Date().toISOString(),
+      notes: 'Auto-generated by Phase 5 Weekly Memory Digest.'
+    });
+  } catch (e) {
+    console.error('[00-architect] weekly digest failed:', e.message);
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Watchdog: check agent heartbeats every 30 minutes
 const BRAIN_PATH = process.env.BRAIN_PATH || './brain';
 // Agent namespace map imported from core/registry.js
@@ -221,6 +354,9 @@ cron.schedule('0 22 * * *', async () => { await buildEveningSummary(); }, { time
 // Watchdog every 30 minutes
 cron.schedule('*/30 * * * *', async () => { await runWatchdog(); }, { timezone: process.env.TZ || 'UTC' });
 
+// Phase 5: Weekly Memory Digest — every Sunday at 9:00 PM
+cron.schedule('0 21 * * 0', async () => { await buildWeeklyMemoryDigest(); }, { timezone: process.env.TZ || 'UTC' });
+
 // Optional immediate run when started with flags
 if (process.argv.includes('--morning-now')) {
   buildMorningBrief();
@@ -230,4 +366,7 @@ if (process.argv.includes('--evening-now')) {
 }
 if (process.argv.includes('--watchdog-now')) {
   runWatchdog();
+}
+if (process.argv.includes('--weekly-digest-now')) {
+  buildWeeklyMemoryDigest();
 }
