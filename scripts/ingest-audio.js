@@ -1,9 +1,16 @@
 /**
  * scripts/ingest-audio.js — Audio transcription pipeline for Plaud Note Pro
  *
+ * REFACTORED: Pipeline now stops at the review queue after transcription + summary.
+ * Audio files are transcribed, summarized, and placed into the review queue
+ * for human review before any classification or memory ingestion occurs.
+ *
+ * Flow: audio → transcription → summary → review queue (STOP)
+ * Downstream: human review → approval → classification → memory ingestion
+ *
  * Watches a directory for audio files (MP3/WAV/M4A), transcribes them
  * locally via whisper.cpp, summarizes via local Ollama model,
- * and writes results as Markdown to the shared context directory.
+ * and inserts into the review queue for human review.
  *
  * If a .md sidecar file exists (produced by plaud-sync.js), the rich
  * AI summary is used directly instead of re-summarizing.
@@ -19,7 +26,9 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { detectTags } from './audio-tagger.js';
-import { writeAudioTranscript } from '../core/openclaw-memory.js';
+import { enqueueForReview } from '../core/review-queue-db.js';
+import { storeRawTranscript, storeNormalizedSummary } from '../core/transcript-store.js';
+import { detectLanguage } from '../core/language-detector.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,7 +104,6 @@ async function summarizeLocal(transcript) {
 
 /**
  * Check if a plaud-sync generated .md sidecar file exists alongside the audio.
- * If it does, we can skip transcription + summarization and use the rich output.
  */
 async function checkSidecarMarkdown(audioPath) {
     const base = audioPath.replace(/\.[^.]+$/, '');
@@ -112,7 +120,6 @@ async function checkSidecarMarkdown(audioPath) {
 
 /**
  * Check if a Plaud Note TXT/JSON transcript exists alongside the audio file.
- * Plaud exports transcripts with the same name as the audio file.
  */
 async function checkPlaudTranscript(audioPath) {
     const base = audioPath.replace(/\.[^.]+$/, '');
@@ -133,7 +140,9 @@ async function checkPlaudTranscript(audioPath) {
 }
 
 /**
- * Process a single audio file
+ * Process a single audio file.
+ * REFACTORED: Now stops at the review queue instead of writing directly to memory.
+ * Flow: transcribe → summarize → detect language → enqueue for review → STOP
  */
 async function processAudioFile(filePath) {
     const filename = path.basename(filePath);
@@ -148,24 +157,18 @@ async function processAudioFile(filePath) {
     }
 
     try {
-        // Check for rich .md sidecar from plaud-sync.js first
         const sidecar = await checkSidecarMarkdown(filePath);
 
         let transcript;
         let summary;
 
         if (sidecar) {
-            // plaud-sync already generated a rich Claude summary
-            // Extract transcript from sidecar or use the whole thing as summary
             transcript = sidecar.content;
             summary = sidecar.content.slice(0, 500);
         } else {
-            // No sidecar — do local transcription + summarization
-            // Check for existing Plaud Note transcript first
             transcript = await checkPlaudTranscript(filePath);
 
             if (!transcript) {
-                // Transcribe the audio locally with whisper.cpp
                 transcript = await transcribeLocal(filePath);
             }
 
@@ -174,13 +177,14 @@ async function processAudioFile(filePath) {
                 return;
             }
 
-            // Summarize via local Ollama
             summary = await summarizeLocal(transcript);
         }
 
-        const durationS = null; // Could be extracted with ffprobe if needed
+        // Detect language (en, hi, mixed-hi-en, unknown)
+        const language = detectLanguage(transcript);
+        console.log(`[ingest-audio] Detected language: ${language}`);
 
-        // Extract tags and agent routing (only for newly generated transcripts)
+        // Extract tags for metadata (preserved for review context)
         let metadata = {};
         if (sidecar) {
             const tagsMatch = sidecar.content.match(/tags:\s*\[([^\]]+)\]/);
@@ -191,8 +195,32 @@ async function processAudioFile(filePath) {
             metadata = detectTags(transcript);
         }
 
-        // Write to shared brain
-        await writeAudioTranscript('plaud-note', filename, transcript, summary, durationS, metadata);
+        // --- REVIEW QUEUE INSERTION (NEW) ---
+        // Instead of writing directly to memory, enqueue for human review.
+        // The review queue entry holds the raw transcript + summary until a human
+        // reviews, tags participants, overrides classification, and approves.
+
+        const reviewQueueId = enqueueForReview({
+            source: 'plaud-note',
+            sourceFile: filename,
+            summary,
+            language,
+            metadata: JSON.stringify(metadata),
+        });
+
+        // Store raw transcript and normalized summary as separate immutable records
+        const transcriptId = storeRawTranscript({
+            reviewQueueId,
+            rawTranscript: transcript,
+            language,
+            sourceFile: filename,
+            durationSeconds: null,
+        });
+
+        // Store normalized summary (interpretation layer, separate from evidence)
+        storeNormalizedSummary(transcriptId, summary);
+
+        console.log(`[ingest-audio] 📋 ${filename} → enqueued for review (queue: ${reviewQueueId}, transcript: ${transcriptId})`);
 
         // Move to processed
         await fs.ensureDir(PROCESSED_DIR);
@@ -207,7 +235,7 @@ async function processAudioFile(filePath) {
             }
         }
 
-        console.log(`[ingest-audio] ✅ ${filename} → transcribed + written to shared brain`);
+        console.log(`[ingest-audio] ✅ ${filename} → transcribed + queued for human review`);
     } catch (e) {
         console.error(`[ingest-audio] ❌ ${filename}: ${e.message}`);
     }
@@ -240,6 +268,7 @@ async function scan() {
 
 console.log(`[ingest-audio] Watching ${AUDIO_INBOX} (poll every ${POLL_INTERVAL / 1000}s)`);
 console.log(`[ingest-audio] Mode: local (whisper.cpp + Ollama ${OLLAMA_MODEL})`);
+console.log(`[ingest-audio] Pipeline: transcribe → summarize → review queue (human review required)`);
 console.log(`[ingest-audio] Whisper binary: ${WHISPER_CPP_PATH}`);
 console.log(`[ingest-audio] Whisper model: ${WHISPER_MODEL_PATH}`);
 scan();
