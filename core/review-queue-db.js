@@ -265,3 +265,11 @@ function safeParse(val) {
   if (!val) return [];
   try { return JSON.parse(val); } catch { return []; }
 }
+
+// ── Aliases for consumer compatibility ──────────────────────────────
+// Dashboard modules and ingest-audio use these names.
+export const enqueueForReview = saveToReviewQueue;
+export const getQueueItem = getReviewItem;
+export const listQueue = listReviewQueue;
+export const updateQueueItem = updateReviewData;
+export const getQueueStats = getReviewCounts;

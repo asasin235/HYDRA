@@ -22,6 +22,13 @@ import { getRecentLogs, getRecentConversation, db,
   listRecordingBriefs, getRecordingBrief, getProjectSummary,
   listActionItems, updateActionItem, saveRecordingBrief
 } from '../core/db.js';
+import reviewQueueRouter from './dashboard-review-routes.js';
+import reviewDetailRouter from './dashboard-review-detail.js';
+import peopleRouter from './dashboard-people-routes.js';
+import participantTaggingRouter from './dashboard-participant-tagging.js';
+import classificationControlsRouter from './dashboard-classification-controls.js';
+import sensitivityControlsRouter from './dashboard-sensitivity-controls.js';
+import factsEditorRouter from './dashboard-facts-editor.js';
 
 const app = express();
 const PORT = process.env.DASHBOARD_PORT || 3080;
@@ -2910,6 +2917,16 @@ ${commonScripts()}
 </body></html>`;
   res.send(html);
 });
+
+// ── Review Queue & People Routes ─────────────────────────────────────────────
+// Specific API routers first, then detail router (greedy /:id must be last)
+app.use('/review', reviewQueueRouter);
+app.use('/review', participantTaggingRouter);
+app.use('/review', classificationControlsRouter);
+app.use('/review', sensitivityControlsRouter);
+app.use('/review', factsEditorRouter);
+app.use('/review', reviewDetailRouter);
+app.use('/people', peopleRouter);
 
 // ── 404 Handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {
