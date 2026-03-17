@@ -40,7 +40,7 @@ export function assignRetention({ sensitivity, domain, hasOpenTasks, hasFacts })
 export function calculateExpiry(retentionClass, fromDate = new Date()) {
   const days = RETENTION_DURATIONS[retentionClass];
   if (days === undefined) {
-    log.warn({ retentionClass }, 'Unknown retention class, defaulting to context');
+    log.warn('Unknown retention class, defaulting to context', { retentionClass });
     return calculateExpiry('context', fromDate);
   }
   if (days === 0) return null;
@@ -58,10 +58,10 @@ export function applyRetentionPolicy(interactionId, { sensitivity, domain, hasOp
   let retentionClass;
   if (manualOverride && VALID_RETENTION.includes(manualOverride)) {
     retentionClass = manualOverride;
-    log.info({ interactionId, retentionClass }, 'Manual retention override applied');
+    log.info('Manual retention override applied', { interactionId, retentionClass });
   } else {
     retentionClass = assignRetention({ sensitivity, domain, hasOpenTasks, hasFacts });
-    log.info({ interactionId, retentionClass, sensitivity, domain }, 'Auto retention assigned');
+    log.info('Auto retention assigned', { interactionId, retentionClass, sensitivity, domain });
   }
 
   const expiresAt = calculateExpiry(retentionClass);
@@ -74,7 +74,7 @@ export function applyRetentionPolicy(interactionId, { sensitivity, domain, hasOp
   const result = stmt.run(retentionClass, expiresAt, interactionId);
 
   if (result.changes === 0) {
-    log.warn({ interactionId }, 'Interaction not found for retention update');
+    log.warn('Interaction not found for retention update', { interactionId });
     return null;
   }
 
@@ -121,7 +121,7 @@ export function purgeExpired() {
   });
 
   const purged = purgeMany(expired);
-  log.info({ purged }, 'Expired records purged');
+  log.info('Expired records purged', { purged });
   return purged;
 }
 
