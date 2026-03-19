@@ -27,6 +27,7 @@ export function ensureReviewQueueTable() {
       id TEXT PRIMARY KEY,
       source_type TEXT NOT NULL DEFAULT 'plaud',
       source_id TEXT,
+      source_file TEXT,
       audio_path TEXT,
       transcript TEXT,
       summary TEXT,
@@ -34,6 +35,7 @@ export function ensureReviewQueueTable() {
       duration_s REAL,
       review_state TEXT NOT NULL DEFAULT '${REVIEW_STATES.RAW}',
       reviewer_notes TEXT,
+      metadata_json TEXT DEFAULT '{}',
       human_annotations_json TEXT DEFAULT '{}',
       participant_labels_json TEXT DEFAULT '[]',
       sensitivity TEXT DEFAULT 'medium',
@@ -53,6 +55,8 @@ export function ensureReviewQueueTable() {
     CREATE INDEX IF NOT EXISTS idx_arq_created_at ON audio_review_queue(created_at);
     CREATE INDEX IF NOT EXISTS idx_arq_language ON audio_review_queue(language_primary);
   `);
+  ensureColumn(db, 'audio_review_queue', 'source_file', 'TEXT');
+  ensureColumn(db, 'audio_review_queue', 'metadata_json', "TEXT DEFAULT '{}'");
   schemaEnsured = true;
   log.info('audio_review_queue table initialized');
 }
@@ -68,23 +72,43 @@ export function saveToReviewQueue(item) {
   ensureReviewQueueTable();
   const db = getDb();
   const id = item.id || uuidv4();
+  const normalizedState = normalizeState(item.review_state || item.status) || REVIEW_STATES.RAW;
+  const sourceType = item.source_type || item.sourceType || item.source || 'plaud';
+  const sourceId = item.source_id || item.sourceId || item.externalId || null;
+  const sourceFile = item.source_file || item.sourceFile || item.filename || null;
+  const audioPath = item.audio_path || item.audioPath || null;
+  const language = item.language_primary || item.language || 'unknown';
+  const duration = item.duration_s || item.durationSeconds || item.duration || null;
+  const sensitivity = item.sensitivity || 'medium';
+  const retentionClass = item.retention_class || item.retentionClass || 'context';
+  const domainGuess = item.domain_guess || item.domain || 'unknown';
+  const relationshipGuess = item.relationship_guess || item.relationshipType || item.relationship_type || 'unknown';
+  const metadata = normalizeJson(item.metadata_json ?? item.metadata, {});
+
   db.prepare(`
     INSERT INTO audio_review_queue
-      (id, source_type, source_id, audio_path, transcript, summary,
-       language_primary, duration_s, review_state, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      (id, source_type, source_id, source_file, audio_path, transcript, summary,
+       language_primary, duration_s, review_state, metadata_json, sensitivity,
+       retention_class, domain_guess, relationship_guess, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
   `).run(
     id,
-    item.source_type || 'plaud',
-    item.source_id || null,
-    item.audio_path || null,
+    sourceType,
+    sourceId,
+    sourceFile,
+    audioPath,
     item.transcript || null,
     item.summary || null,
-    item.language_primary || 'unknown',
-    item.duration_s || null,
-    item.review_state || REVIEW_STATES.RAW
+    language,
+    duration,
+    normalizedState,
+    metadata,
+    sensitivity,
+    retentionClass,
+    domainGuess,
+    relationshipGuess
   );
-  log.info(`Saved to review queue: ${id} (state=${item.review_state || REVIEW_STATES.RAW})`);
+  log.info(`Saved to review queue: ${id} (state=${normalizedState})`);
   return id;
 }
 
@@ -119,9 +143,11 @@ export function listByState(state, limit = 50) {
  * @param {object} opts
  * @returns {Array}
  */
-export function listReviewQueue({ state = null, source_type = null, language = null, since = null, limit = 50, offset = 0 } = {}) {
+export function listReviewQueue({ state = null, status = null, source_type = null, language = null, since = null, limit = 50, offset = 0 } = {}) {
   ensureReviewQueueTable();
   const db = getDb();
+  const normalizedState = normalizeState(state || status);
+  const normalizedSourceType = source_type || null;
   return db.prepare(`
     SELECT * FROM audio_review_queue
     WHERE (? IS NULL OR review_state = ?)
@@ -130,7 +156,7 @@ export function listReviewQueue({ state = null, source_type = null, language = n
       AND (? IS NULL OR created_at >= ?)
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
-  `).all(state, state, source_type, source_type, language, language, since, since, limit, offset)
+  `).all(normalizedState, normalizedState, normalizedSourceType, normalizedSourceType, language, language, since, since, limit, offset)
     .map(parseReviewRow);
 }
 
@@ -156,32 +182,66 @@ export function updateReviewState(id, newState) {
 export function updateReviewData(id, data) {
   ensureReviewQueueTable();
   const db = getDb();
+  const updates = [];
+  const params = [];
+  const mappings = [
+    ['review_state', normalizeState(data.review_state || data.status)],
+    ['reviewer_notes', data.reviewer_notes ?? data.review_notes],
+    ['summary', data.summary],
+    ['transcript', data.transcript],
+    ['source_type', data.source_type || data.sourceType || data.source],
+    ['source_id', data.source_id || data.sourceId || data.externalId],
+    ['source_file', data.source_file || data.sourceFile || data.filename],
+    ['audio_path', data.audio_path || data.audioPath],
+    ['language_primary', data.language_primary || data.language],
+    ['duration_s', data.duration_s || data.durationSeconds || data.duration],
+    ['sensitivity', data.sensitivity],
+    ['retention_class', data.retention_class || data.retentionClass],
+    ['domain_guess', data.domain_guess || data.domain],
+    ['relationship_guess', data.relationship_guess || data.relationship_type || data.relationshipType],
+    ['reviewed_at', data.reviewed_at],
+    ['reviewed_by', data.reviewed_by || data.reviewer],
+  ];
+
+  for (const [column, value] of mappings) {
+    if (value === undefined) continue;
+    updates.push(`${column} = ?`);
+    params.push(value);
+  }
+
+  if (data.metadata_json !== undefined || data.metadata !== undefined) {
+    updates.push('metadata_json = ?');
+    params.push(normalizeJson(data.metadata_json ?? data.metadata, {}));
+  }
+  if (data.human_annotations_json !== undefined || data.human_annotations !== undefined) {
+    updates.push('human_annotations_json = ?');
+    params.push(normalizeJson(data.human_annotations_json ?? data.human_annotations, {}));
+  }
+  if (data.participant_labels_json !== undefined || data.participant_labels !== undefined) {
+    updates.push('participant_labels_json = ?');
+    params.push(normalizeJson(data.participant_labels_json ?? data.participant_labels, []));
+  }
+  if (data.suggested_tasks_json !== undefined || data.suggested_tasks !== undefined) {
+    updates.push('suggested_tasks_json = ?');
+    params.push(normalizeJson(data.suggested_tasks_json ?? data.suggested_tasks, []));
+  }
+  if (data.suggested_facts_json !== undefined || data.suggested_facts !== undefined) {
+    updates.push('suggested_facts_json = ?');
+    params.push(normalizeJson(data.suggested_facts_json ?? data.suggested_facts, []));
+  }
+
+  if (updates.length === 0) return getReviewItem(id);
+
+  updates.push("updated_at = datetime('now')");
+  params.push(id);
+
   db.prepare(`
     UPDATE audio_review_queue
-    SET reviewer_notes = ?,
-        human_annotations_json = ?,
-        participant_labels_json = ?,
-        sensitivity = ?,
-        retention_class = ?,
-        domain_guess = ?,
-        relationship_guess = ?,
-        suggested_tasks_json = ?,
-        suggested_facts_json = ?,
-        updated_at = datetime('now')
+    SET ${updates.join(', ')}
     WHERE id = ?
-  `).run(
-    data.reviewer_notes || null,
-    JSON.stringify(data.human_annotations || {}),
-    JSON.stringify(data.participant_labels || []),
-    data.sensitivity || 'medium',
-    data.retention_class || 'context',
-    data.domain_guess || 'unknown',
-    data.relationship_guess || 'unknown',
-    JSON.stringify(data.suggested_tasks || []),
-    JSON.stringify(data.suggested_facts || []),
-    id
-  );
+  `).run(...params);
   log.info(`Review data updated: ${id}`);
+  return getReviewItem(id);
 }
 
 /**
@@ -231,23 +291,58 @@ export function getPendingCount() {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 function parseReviewRow(row) {
+  const metadata = safeParse(row.metadata_json, {});
+  const humanAnnotations = safeParse(row.human_annotations_json, {});
+  const participantLabels = safeParse(row.participant_labels_json, []);
+  const suggestedTasks = safeParse(row.suggested_tasks_json, []);
+  const suggestedFacts = safeParse(row.suggested_facts_json, []);
   return {
     ...row,
-    human_annotations: safeParse(row.human_annotations_json),
-    participant_labels: safeParse(row.participant_labels_json),
-    suggested_tasks: safeParse(row.suggested_tasks_json),
-    suggested_facts: safeParse(row.suggested_facts_json),
+    source: row.source_type,
+    sourceFile: row.source_file,
+    language: row.language_primary,
+    status: row.review_state,
+    review_notes: row.reviewer_notes,
+    domain: row.domain_guess,
+    relationship_type: row.relationship_guess,
+    metadata,
+    human_annotations: humanAnnotations,
+    participant_labels: participantLabels,
+    suggested_tasks: suggestedTasks,
+    suggested_facts: suggestedFacts,
   };
 }
 
-function safeParse(val) {
-  if (!val) return [];
-  try { return JSON.parse(val); } catch { return []; }
+function safeParse(val, fallback = []) {
+  if (!val) return fallback;
+  try { return JSON.parse(val); } catch { return fallback; }
+}
+
+function normalizeJson(val, fallback) {
+  if (val === undefined) return JSON.stringify(fallback);
+  if (typeof val === 'string') return val;
+  return JSON.stringify(val ?? fallback);
+}
+
+function normalizeState(state) {
+  if (!state) return null;
+  const aliasMap = {
+    pending: REVIEW_STATES.NEEDS_REVIEW,
+    in_review: REVIEW_STATES.REVIEWED,
+  };
+  return aliasMap[state] || state;
+}
+
+function ensureColumn(db, tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (columns.some(column => column.name === columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
 // ── Aliases for consumer compatibility ──────────────────────────────
 // Dashboard modules and ingest-audio use these names.
 export const enqueueForReview = saveToReviewQueue;
+export const createQueueItem = saveToReviewQueue;
 export const getQueueItem = getReviewItem;
 export const listQueue = listReviewQueue;
 export const updateQueueItem = updateReviewData;

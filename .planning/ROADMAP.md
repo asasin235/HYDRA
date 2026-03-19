@@ -12,7 +12,7 @@ HYDRA already has validated ingestion, memory, agent, and PM2 runtime foundation
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Functional Backend Foundation** - Typed Node contracts and adapter boundaries for the dashboard rewrite
+- [x] **Phase 1: Functional Backend Foundation** - Typed Node contracts and adapter boundaries for the dashboard rewrite
 - [ ] **Phase 2: React Operator Shell** - React + TypeScript shell, auth flow, and navigation for operator workflows
 - [ ] **Phase 3: Review Queue Read Flows** - Normalized queue/detail reads and ingest visibility in the new dashboard
 - [ ] **Phase 4: Approval Workflow Hardening** - Safe save/approve/archive actions for reviewed-memory workflows
@@ -31,9 +31,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: Inventory legacy dashboard routes and define typed operator/review contracts
-- [ ] 01-02: Split functional domain modules from backend adapters for review and runtime flows
-- [ ] 01-03: Wire backend bootstrap into the existing Node/PM2 environment with brownfield-safe boundaries
+- [x] 01-01: Inventory legacy dashboard routes and define typed operator/review contracts
+- [x] 01-02: Split functional domain modules from backend adapters for review and runtime flows
+- [x] 01-03: Wire backend bootstrap into the existing Node/PM2 environment with brownfield-safe boundaries
 
 ### Phase 2: React Operator Shell
 **Goal**: Deliver the React + TypeScript dashboard shell, authentication flow, and navigation for the new operator experience.
@@ -102,7 +102,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Functional Backend Foundation | 0/3 | Not started | - |
+| 1. Functional Backend Foundation | 3/3 | Complete | 2026-03-20 |
 | 2. React Operator Shell | 0/3 | Not started | - |
 | 3. Review Queue Read Flows | 0/3 | Not started | - |
 | 4. Approval Workflow Hardening | 0/3 | Not started | - |
