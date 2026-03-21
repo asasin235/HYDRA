@@ -120,7 +120,7 @@ describe('dashboard backend routes', () => {
       session: {
         cookieName: 'hydra_dashboard_sid',
         apiKeyHeader: 'x-api-key',
-        isMachineAuthenticated: vi.fn(),
+        isMachineAuthenticated: vi.fn(() => true),
         buildCookieHeader: vi.fn(),
       },
       reviewStore,
@@ -198,16 +198,9 @@ describe('dashboard backend routes', () => {
       session: {
         cookieName: 'hydra_dashboard_sid',
         apiKeyHeader: 'x-api-key',
-        isMachineAuthenticated: vi.fn(),
+        isMachineAuthenticated: vi.fn(() => true),
         buildCookieHeader: vi.fn(),
       },
-      reviewStore,
-      runtimeOps,
-    });
-
-    const server = await startServer(app);
-    try {
-      const overviewResponse = await fetch(`${server.url}/api/dashboard/backend/runtime/overview`);
       const overviewBody = await overviewResponse.json() as Record<string, any>;
       expect(overviewBody.processes[0].status).toBe('healthy');
       expect(overviewBody.usage[0].name).toBe('00-architect');

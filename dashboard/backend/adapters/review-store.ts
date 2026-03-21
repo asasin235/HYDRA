@@ -4,6 +4,7 @@
 
 import { runApprovalPipeline } from '../../../core/approval-pipeline.js';
 import { getClassificationByReviewQueueId } from '../../../core/interaction-classifier.js';
+import { approveReview, archiveReview, saveDraft } from '../../../core/review-actions.js';
 import { getQueueItem, getQueueStats, listQueue, updateQueueItem } from '../../../core/review-queue-db.js';
 import { getTranscriptByReviewQueueId } from '../../../core/transcript-store.js';
 import type { ReviewUpdateInputDto } from '../contracts/review.js';
@@ -23,6 +24,9 @@ type ReviewStoreDependencies = Readonly<{
   getTranscriptByReviewQueueId: typeof getTranscriptByReviewQueueId;
   getClassificationByReviewQueueId: typeof getClassificationByReviewQueueId;
   runApprovalPipeline: typeof runApprovalPipeline;
+  approveReview: typeof approveReview;
+  archiveReview: typeof archiveReview;
+  saveDraft: typeof saveDraft;
 }>;
 
 export type ReviewStoreAdapter = Readonly<{
@@ -50,6 +54,9 @@ const DEFAULT_DEPENDENCIES: ReviewStoreDependencies = {
   getTranscriptByReviewQueueId,
   getClassificationByReviewQueueId,
   runApprovalPipeline,
+  approveReview,
+  archiveReview,
+  saveDraft,
 };
 
 export function createReviewStoreAdapter(
@@ -81,37 +88,44 @@ export function createReviewStoreAdapter(
     getQueueDetail,
     updateReview: async (id, input) => {
       const reviewer = input.reviewer ?? 'dashboard-user';
-      const notes = input.reviewNotes ?? null;
+      const notes = input.reviewNotes;
 
       if (input.rerunClassification) {
         deps.updateQueueItem(id, {
           status: 'needs_review',
-          review_notes: notes,
+          review_notes: notes ?? null,
           reviewer,
         });
         return getQueueDetail(id);
       }
 
       if (input.status === 'approved') {
-        deps.updateQueueItem(id, {
-          status: 'approved',
-          review_notes: notes,
-          reviewed_by: reviewer,
-          reviewed_at: new Date().toISOString(),
-        });
+        // Delegate to approveReview to enforce transition guards
+        // (e.g., archived items cannot be approved)
+        deps.approveReview(id, { notes, reviewer });
         await deps.runApprovalPipeline(id);
         return getQueueDetail(id);
       }
 
-      const payload: Record<string, unknown> = {
-        review_notes: notes,
-      };
-
-      if (input.status) {
-        payload.status = input.status;
-        payload.reviewed_by = reviewer;
-        payload.reviewed_at = new Date().toISOString();
+      if (input.status === 'archived') {
+        // Delegate to archiveReview to enforce transition guards
+        deps.archiveReview(id, { reason: notes, reviewer });
+        return getQueueDetail(id);
       }
+
+      if (input.status === 'reviewed' || input.status == null) {
+        // Save draft — preserves notes without triggering final ingest
+        deps.saveDraft(id, { reviewer, notes });
+        return getQueueDetail(id);
+      }
+
+      // Other explicit status transitions (raw, transcribed, needs_review, indexed, failed)
+      const payload: Record<string, unknown> = {
+        review_notes: notes ?? null,
+        status: input.status,
+        reviewed_by: reviewer,
+        reviewed_at: new Date().toISOString(),
+      };
 
       deps.updateQueueItem(id, payload);
       return getQueueDetail(id);

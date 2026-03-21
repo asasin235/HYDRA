@@ -31,12 +31,18 @@ export function createRuntimeRoutes(runtimeOps: RuntimeOpsAdapter) {
   });
 
   router.post('/control/:name', async (req, res) => {
+    let input;
     try {
-      const input = normalizeRuntimeControlInput({
+      input = normalizeRuntimeControlInput({
         name: req.params.name,
         action: req.body?.action,
       });
+    } catch (validationError) {
+      res.status(400).json({ error: validationError instanceof Error ? validationError.message : String(validationError) });
+      return;
+    }
 
+    try {
       const result = await runtimeOps.controlProcess(input.name, input.action);
       res.json(normalizeRuntimeControlResult(input.name, input.action, result as Record<string, unknown>));
     } catch (error) {
