@@ -32,6 +32,33 @@ describe('review store adapter', () => {
     });
     expect(runApprovalPipeline).toHaveBeenCalledWith('rq-1');
   });
+
+  it('returns items to needs_review on rerun without calling the approval pipeline', async () => {
+    const updateQueueItem = vi.fn(() => ({ id: 'rq-2' }) as never);
+    const runApprovalPipeline = vi.fn(async () => {});
+    const adapter = createReviewStoreAdapter({
+      getQueueItem: vi.fn(() => ({ id: 'rq-2', status: 'reviewed', review_notes: 'existing' }) as never),
+      getQueueStats: vi.fn(() => ({}) as never),
+      listQueue: vi.fn(() => [] as never),
+      updateQueueItem,
+      getTranscriptByReviewQueueId: vi.fn(() => null as never),
+      getClassificationByReviewQueueId: vi.fn(() => null as never),
+      runApprovalPipeline,
+    });
+
+    await adapter.updateReview('rq-2', {
+      rerunClassification: true,
+      reviewer: 'operator',
+      reviewNotes: 'rerun',
+    });
+
+    expect(updateQueueItem).toHaveBeenCalledWith('rq-2', expect.objectContaining({
+      status: 'needs_review',
+      review_notes: 'rerun',
+      reviewer: 'operator',
+    }));
+    expect(runApprovalPipeline).not.toHaveBeenCalled();
+  });
 });
 
 describe('runtime ops adapter', () => {
@@ -87,6 +114,26 @@ describe('runtime ops adapter', () => {
 
     const heartbeats = await adapter.getHeartbeats();
     expect((heartbeats['00-architect'] as Record<string, any>).status).toBe('fresh');
+  });
+
+  it('returns empty usage and no-data heartbeats when brownfield files are missing', async () => {
+    const adapter = createRuntimeOpsAdapter({
+      brainPath: '/tmp/hydra-test',
+      registry: {
+        '00-architect': { namespace: '00_ARCHITECT', model: 'google/gemini-2.5-flash', tier: 1 },
+        '99-slack-gateway': { namespace: '99_GATEWAY', model: null, tier: 1 },
+      } as never,
+      pathExists: vi.fn(async () => false),
+      readJson: vi.fn(async () => ({})),
+      execFileSync: vi.fn(() => Buffer.from('[]')) as never,
+      now: () => Date.parse('2026-03-20T00:05:00.000Z'),
+    });
+
+    const usage = await adapter.getUsage();
+    expect(usage).toMatchObject({ month: '', totalCost: 0, budget: 50 });
+
+    const heartbeats = await adapter.getHeartbeats();
+    expect((heartbeats['00-architect'] as Record<string, any>).status).toBe('no-data');
   });
 
   it('validates known PM2 process names before control actions', async () => {
