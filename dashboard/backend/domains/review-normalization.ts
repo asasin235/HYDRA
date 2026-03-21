@@ -50,11 +50,19 @@ export function normalizeReviewQueueStats(raw: Record<string, unknown>): ReviewQ
     transcribed: readCount(raw.transcribed),
     needs_review: readCount(raw.needs_review ?? raw.pending),
     reviewed: readCount(raw.reviewed ?? raw.in_review),
-    approved: readCount(raw.approved ?? raw.indexed),
+    approved: readCount(raw.approved),
     indexed: readCount(raw.indexed),
     archived: readCount(raw.archived),
     failed: readCount(raw.failed),
   };
+
+  // Legacy compatibility: some older stats only provided `indexed` where it actually
+  // represented approved items. In that case, treat `indexed` as `approved` and
+  // avoid double-counting by zeroing out the separate `indexed` bucket.
+  if (raw.approved == null && raw.indexed != null) {
+    byStatus.approved = byStatus.indexed;
+    byStatus.indexed = 0;
+  }
 
   return parseReviewQueueStats({
     total: Object.values(byStatus).reduce((sum, count) => sum + count, 0),
