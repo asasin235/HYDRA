@@ -676,4 +676,8 @@ export function closeDb() {
   db.close();
 }
 
+export function getDb() {
+  return db;
+}
+
 export { db };
