@@ -61,7 +61,21 @@ export function ensureReviewQueueTable() {
     CREATE INDEX IF NOT EXISTS idx_arq_language ON audio_review_queue(language_primary);
   `);
   ensureColumn(db, 'audio_review_queue', 'source_file', 'TEXT');
+  ensureColumn(db, 'audio_review_queue', 'audio_path', 'TEXT');
+  ensureColumn(db, 'audio_review_queue', 'language_primary', "TEXT DEFAULT 'unknown'");
+  ensureColumn(db, 'audio_review_queue', 'duration_s', 'REAL');
+  ensureColumn(db, 'audio_review_queue', 'reviewer_notes', 'TEXT');
   ensureColumn(db, 'audio_review_queue', 'metadata_json', "TEXT DEFAULT '{}'");
+  ensureColumn(db, 'audio_review_queue', 'human_annotations_json', "TEXT DEFAULT '{}'");
+  ensureColumn(db, 'audio_review_queue', 'participant_labels_json', "TEXT DEFAULT '[]'");
+  ensureColumn(db, 'audio_review_queue', 'sensitivity', "TEXT DEFAULT 'medium'");
+  ensureColumn(db, 'audio_review_queue', 'retention_class', "TEXT DEFAULT 'context'");
+  ensureColumn(db, 'audio_review_queue', 'domain_guess', "TEXT DEFAULT 'unknown'");
+  ensureColumn(db, 'audio_review_queue', 'relationship_guess', "TEXT DEFAULT 'unknown'");
+  ensureColumn(db, 'audio_review_queue', 'suggested_tasks_json', "TEXT DEFAULT '[]'");
+  ensureColumn(db, 'audio_review_queue', 'suggested_facts_json', "TEXT DEFAULT '[]'");
+  ensureColumn(db, 'audio_review_queue', 'reviewed_at', 'TEXT');
+  ensureColumn(db, 'audio_review_queue', 'reviewed_by', 'TEXT');
   schemaEnsured = true;
   log.info('audio_review_queue table initialized');
 }

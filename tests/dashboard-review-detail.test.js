@@ -11,16 +11,24 @@ const trackedResources = [];
 
 async function loadReviewDetailModule() {
   const brainPath = await fs.mkdtemp(path.join(os.tmpdir(), 'hydra-review-detail-'));
-  trackedResources.push(brainPath);
 
   vi.resetModules();
   vi.stubEnv('BRAIN_PATH', brainPath);
+
+  const dbModule = await import('../core/db.js');
+  trackedResources.push({ brainPath, closeDb: dbModule.closeDb });
+
   return import('../scripts/dashboard-review-detail.js');
 }
 
 afterEach(async () => {
   while (trackedResources.length > 0) {
-    const brainPath = trackedResources.pop();
+    const { brainPath, closeDb } = trackedResources.pop();
+
+    if (typeof closeDb === 'function') {
+      closeDb();
+    }
+
     await fs.rm(brainPath, { recursive: true, force: true });
   }
 });

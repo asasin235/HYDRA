@@ -40,12 +40,33 @@ export function updateReviewParticipantLink(participantId, updates = {}) {
   const match = findReviewParticipant(participantId);
   if (!match) return null;
 
-  const updatedParticipant = {
-    ...match.participant,
-    person_id: updates.person_id || updates.personId || match.participant.person_id || null,
-    speaker_label: updates.speaker_label || updates.speakerLabel || match.participant.speaker_label || null,
-    role: updates.role || match.participant.role || 'participant',
-  };
+  const updatedParticipant = { ...match.participant };
+
+  // Determine updated person_id, allowing explicit null/empty to clear the link.
+  let nextPersonId = match.participant.person_id ?? null;
+  if (Object.hasOwn(updates, 'person_id')) {
+    nextPersonId = updates.person_id;
+  } else if (Object.hasOwn(updates, 'personId')) {
+    nextPersonId = updates.personId;
+  }
+  updatedParticipant.person_id = nextPersonId;
+
+  // Determine updated speaker_label, allowing explicit null/empty to clear it.
+  let nextSpeakerLabel = match.participant.speaker_label ?? null;
+  if (Object.hasOwn(updates, 'speaker_label')) {
+    nextSpeakerLabel = updates.speaker_label;
+  } else if (Object.hasOwn(updates, 'speakerLabel')) {
+    nextSpeakerLabel = updates.speakerLabel;
+  }
+  updatedParticipant.speaker_label = nextSpeakerLabel;
+
+  // Determine updated role; honor explicit falsy values if provided.
+  let nextRole = match.participant.role || 'participant';
+  if (Object.hasOwn(updates, 'role')) {
+    nextRole = updates.role;
+  }
+  updatedParticipant.role = nextRole;
+
   updatedParticipant.resolved = Boolean(updatedParticipant.person_id);
 
   updateQueueItem(match.reviewQueueId, {
@@ -218,17 +239,29 @@ function listReviewParticipants(reviewQueueId) {
 }
 
 function findReviewParticipant(participantId) {
-  for (const item of listQueue({ limit: 1000 })) {
-    const participants = Array.isArray(item.participant_labels) ? item.participant_labels : [];
-    const participant = participants.find((entry) => entry.id === participantId);
-    if (participant) {
-      return {
-        reviewQueueId: item.id,
-        participant,
-        participants,
-      };
+  const PAGE_SIZE = 500;
+  let offset = 0;
+
+  while (true) {
+    const page = listQueue({ limit: PAGE_SIZE, offset });
+    if (page.length === 0) break;
+
+    for (const item of page) {
+      const participants = Array.isArray(item.participant_labels) ? item.participant_labels : [];
+      const participant = participants.find((entry) => entry.id === participantId);
+      if (participant) {
+        return {
+          reviewQueueId: item.id,
+          participant,
+          participants,
+        };
+      }
     }
+
+    if (page.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
   }
+
   return null;
 }
 

@@ -68,13 +68,28 @@ export function refreshReviewQueueSurfacing(reviewQueueId) {
 }
 
 function getSurfacingParticipants(db, reviewQueueId, participantLabels) {
-  const rows = db.prepare(`
-    SELECT ip.*, p.canonical_name, p.display_name, p.relationship_type, p.organization
-    FROM interaction_participants ip
-    LEFT JOIN people p ON p.id = ip.person_id
-    WHERE ip.interaction_id = ?
-    ORDER BY ip.created_at ASC
-  `).all(reviewQueueId);
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT ip.*, p.canonical_name, p.display_name, p.relationship_type, p.organization
+      FROM interaction_participants ip
+      LEFT JOIN people p ON p.id = ip.person_id
+      WHERE ip.interaction_id = ?
+      ORDER BY ip.created_at ASC
+    `).all(reviewQueueId);
+  } catch (error) {
+    const message = error?.message ?? '';
+    if (message.includes('no such table: interaction_participants')) {
+      // In some processes (e.g., fresh DB in ingest-audio), the interaction_participants
+      // table may not exist yet. Fall back to participant_labels_json-only participants.
+      log.warn(
+        { reviewQueueId },
+        'interaction_participants table missing; falling back to participant_labels_json participants only',
+      );
+    } else {
+      throw error;
+    }
+  }
 
   const participants = [];
   const seenKeys = new Set();
