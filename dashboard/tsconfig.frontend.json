@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "backend/contracts/**/*.ts",
+    "frontend/**/*.ts",
+    "frontend/**/*.tsx",
+    "../tests/dashboard-frontend/**/*.ts",
+    "../tests/dashboard-frontend/**/*.tsx"
+  ]
+}
