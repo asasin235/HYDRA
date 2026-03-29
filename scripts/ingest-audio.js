@@ -53,6 +53,40 @@ const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.ogg', '.webm', '.flac'];
 const MAX_FILE_SIZE_MB = 25;
 
 /**
+ * Pre-flight permission check for the audio inbox directory.
+ *
+ * Catches the macOS EPERM case where the Node.js / Terminal process has not been
+ * granted Full Disk Access for external or network volumes (e.g. /Volumes/...).
+ *
+ * Returns true if the directory is readable, or if it does not yet exist
+ * (fs.ensureDir in scan() will create it on the first successful poll).
+ * Returns false and logs a clear, actionable error if access is denied.
+ */
+async function checkInboxReadable() {
+    try {
+        await fs.access(AUDIO_INBOX, fs.constants.R_OK);
+        return true;
+    } catch (e) {
+        if (e.code === 'ENOENT') {
+            // Directory does not exist yet — scan() will create it via fs.ensureDir.
+            return true;
+        }
+        if (e.code === 'EPERM' || e.code === 'EACCES') {
+            log.error(
+                `PERMISSION DENIED: Cannot read audio inbox at "${AUDIO_INBOX}". ` +
+                `If this path is on an external or network volume on macOS, grant Full Disk Access ` +
+                `to the Terminal (or the process running this script):\n` +
+                `  → System Settings → Privacy & Security → Full Disk Access → add Terminal / PM2\n` +
+                `Error code: ${e.code}`
+            );
+        } else {
+            log.error(`Cannot access audio inbox at "${AUDIO_INBOX}": ${e.message} (${e.code})`);
+        }
+        return false;
+    }
+}
+
+/**
  * Transcribe audio via local whisper.cpp binary
  */
 async function transcribeLocal(filePath) {
@@ -202,11 +236,8 @@ async function processAudioFile(filePath) {
             metadata = detectTags(transcript);
         }
 
-        // --- REVIEW QUEUE INSERTION (NEW) ---
+        // --- REVIEW QUEUE INSERTION ---
         // Instead of writing directly to memory, enqueue for human review.
-        // The review queue entry holds the raw transcript + summary until a human
-        // reviews, tags participants, overrides classification, and approves.
-
         const reviewQueueId = enqueueForReview({
             source: 'plaud-note',
             sourceFile: filename,
@@ -255,10 +286,21 @@ async function processAudioFile(filePath) {
 }
 
 /**
- * Scan inbox and process new audio files
+ * Scan inbox and process new audio files.
+ * Runs a pre-flight permission check first so EPERM on external volumes
+ * is logged clearly and the cycle is skipped gracefully instead of
+ * failing silently on each individual file open.
  */
 async function scan() {
     try {
+        // Pre-flight: verify the inbox is readable before listing files.
+        // This catches EPERM / EACCES on external/network volumes early.
+        const readable = await checkInboxReadable();
+        if (!readable) {
+            log.error('scan: audio inbox is not readable — skipping this cycle. Fix permissions and the next poll will retry automatically.');
+            return;
+        }
+
         await fs.ensureDir(AUDIO_INBOX);
         const files = await fs.readdir(AUDIO_INBOX);
         const audioFiles = files.filter(f => {
@@ -284,5 +326,20 @@ log.info(`Mode: local (whisper.cpp + Ollama ${OLLAMA_MODEL})`);
 log.info('Pipeline: transcribe → summarize → review queue (human review required)');
 log.info(`Whisper binary: ${WHISPER_CPP_PATH}`);
 log.info(`Whisper model: ${WHISPER_MODEL_PATH}`);
+
+// Run a pre-flight permission check at startup so any EPERM issues are surfaced
+// immediately in process logs — before the first scheduled scan fires.
+checkInboxReadable().then(ok => {
+    if (!ok) {
+        log.error(
+            'Startup permission check FAILED for audio inbox. ' +
+            'The process will keep running and retry on each poll interval. ' +
+            'To fix on macOS: System Settings → Privacy & Security → Full Disk Access → add Terminal or PM2.'
+        );
+    } else {
+        log.info('Startup permission check passed — audio inbox is accessible.');
+    }
+});
+
 scan();
 setInterval(scan, POLL_INTERVAL);
