@@ -35,11 +35,16 @@ export function getParticipantPriors(personId) {
 
   // Find all interactions involving this person
   const interactions = db.prepare(`
-    SELECT i.relationship_type, i.domain, i.sensitivity, i.language
+    SELECT
+      i.relationship_guess AS relationship_type,
+      i.domain_guess AS domain,
+      i.sensitivity,
+      i.language_primary AS language
     FROM interactions i
     JOIN interaction_participants ip ON ip.interaction_id = i.id
-    WHERE ip.person_id = ? AND i.status = 'active'
-    ORDER BY i.created_at DESC
+    WHERE ip.person_id = ?
+      AND COALESCE(i.sensitivity, 'medium') != 'restricted'
+    ORDER BY COALESCE(i.started_at, i.created_at) DESC
     LIMIT 50
   `).all(personId);
 
